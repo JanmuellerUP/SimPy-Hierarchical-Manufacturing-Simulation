@@ -1,0 +1,72 @@
+import pandas as pd
+import numpy as np
+from Utils import plot_results
+from Utils.devisions import div_possible_zero
+from Order import Order
+import matplotlib.pyplot as plot
+
+
+def single_object(obj, time_start=0, time_end=None, attribute="moving", value=True):
+    df_original = pd.DataFrame(obj.logs)
+    df = pd.concat([df_original.drop(['Data'], axis=1), df_original['Data'].apply(pd.Series)], axis=1)
+    if not time_end:
+        time_end = df['Time'].max()
+    time_range = time_end - time_start
+    df_filtered = df[(df["Time"] >= time_start) & (df["Time"] <= time_end)]
+    #TODO Fuege Start und Ende hinzu....
+    periods = calculate_time_periods(df_filtered, attribute)
+    if value:
+        periods = periods[periods["Value"] == value]
+        time_abs = periods["End"].sum() - periods["Start"].sum()
+        #TODO Berechne absolute Zeitspanne wo value, berechne relativ zur Simulationszeit
+
+    plot_results.plot_gantt(periods)
+
+
+def calculate_time_periods(df: pd.DataFrame, dimension: str):
+    sets = [(index, row, False) for index, row in df.iterrows()]
+    time_periods = []
+    for i in range(0, len(sets)):
+        index, row, already_included = sets[i]
+        if not already_included:
+            value = row[dimension]
+            j=i
+            for j in range(i+1, len(sets)):
+                index_n, row_n, already_included_n = sets[j]
+                if value != row_n[dimension]:
+                    time_periods.append((row["Time"], row_n["Time"], value))
+                    break
+    time_periods = [(start, end, value) for (start, end, value) in time_periods if start != end]
+    current_time = time_periods[0][0]
+    filtered_time_periods = []
+    for (start, end, value) in time_periods:
+        if start == current_time:
+            filtered_time_periods.append((start, end, value))
+            current_time = end
+    result = pd.DataFrame(filtered_time_periods, columns=["Start", "End", "Value"])
+    return result
+
+
+def orders_by_time_global(sim_env, start=0, end=-1, intervals=1, group_by_type=False, group_by_overdue=False, show_diagram=False):
+    if end == -1 or end > sim_env.SIMULATION_TIME_RANGE:
+        end = sim_env.SIMULATION_TIME_RANGE
+    time_range = end - start
+    interval_length = time_range/intervals
+    intervals = [(i * interval_length, (i + 1) * interval_length) for i in range(intervals)]
+    df = pd.DataFrame(intervals, columns=["start", "end"])
+
+    data = []
+    for index, row in df.iterrows():
+        started_order = [order for order in Order.instances if (row["start"] <= order.start < row["end"])]
+        completed_order = [order for order in Order.finished_instances if (row["start"] <= order.completed_at < row["end"])]
+        data.append((started_order, completed_order))
+    data_df = pd.DataFrame(data, columns=["started_order", "completed_order"])
+
+    df = pd.concat([df, data_df], axis=1)
+    df['#started_order'] = df.started_order.apply(lambda x: len(x))
+    df['#completed_order'] = df.completed_order.apply(lambda x: len(x))
+    df['time_label'] = df['start'].astype(str) + " - " + df['end'].astype(str)
+
+    if show_diagram:
+        ax = df.plot.bar(x="time_label", y=["#started_order", "#completed_order"])
+        plot.show(block=True)
