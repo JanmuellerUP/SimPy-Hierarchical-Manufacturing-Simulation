@@ -1,0 +1,106 @@
+{
+  "rulesets":
+          [
+            {
+              "id": 0,
+              "name": "Random",
+              "description": "Agenten entscheiden sich zufällig für einen verfügbaren Auftrag",
+              "rules":
+              {
+                "random": true,
+                "seed": 12345,
+                "criteria": {}
+              }
+
+            },
+            {
+              "id": 1,
+              "name": "Test",
+              "description": "Agenten entscheiden sich zufällig für einen verfügbaren Auftrag",
+              "rules":
+              {
+                "random": true,
+                "seed": 12345,
+                "criteria": {}
+              }
+
+            },
+            {
+              "id": 2,
+              "name": "FiFo Global",
+              "description": "Bevorzuge die Aufträge, welche am ältesten sind.",
+              "rules":
+              {
+                "criteria": {
+                  "numerical": [
+                    {
+                      "measure": "start",
+                      "category": "local",
+                      "ranking_order": "ASC",
+                      "weight": 1
+                    },
+                    {
+                      "measure": "distance",
+                      "category": "local",
+                      "ranking_order": "ASC",
+                      "weight": 0.3
+                    },
+                                        {
+                      "measure": "est_accessable_in",
+                      "category": "local",
+                      "ranking_order": "ASC",
+                      "weight": 0.3
+                    }
+                  ]
+
+                }
+
+              }
+
+            },
+            {
+              "id": 3,
+              "name": "FiFo Local",
+              "description": "Bevorzuge die Aufträge, die als erstes in der Zelle eingetroffen sind.",
+              "rules":
+              {
+                "criteria": {
+                  "numerical": [
+                    {
+                      "measure": "in_cell_since",
+                      "category": "local",
+                      "ranking_order": "ASC",
+                      "weight": 1
+                    },
+                    {
+                      "measure": "distance",
+                      "category": "local",
+                      "ranking_order": "ASC",
+                      "weight": 0.3
+                    },
+                    {
+                      "measure": "est_accessable_in",
+                      "category": "local",
+                      "ranking_order": "ASC",
+                      "weight": 0.3
+                    }
+                  ]
+
+                }
+
+              }
+
+            },
+            {
+              "id": 4,
+              "name": "Placeholder - Dynamic",
+              "description": "Schnittstelle für Erweiterung mit Machinelearning Algorithmen",
+              "rules":
+              {
+                "dynamic": true,
+                "criteria": {}
+              }
+            }
+          ]
+
+}

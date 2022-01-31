@@ -1,0 +1,29 @@
+{
+  "tasks":
+          [
+            {
+              "id": 0,
+              "title": "Schleifen",
+              "base_duration": 10,
+              "tool_change_needed": true
+            },
+            {
+              "id": 1,
+              "title": "Fraesen",
+              "base_duration": 20,
+              "tool_change_needed": true
+            },
+            {
+              "id": 2,
+              "title": "Montieren",
+              "base_duration": 5,
+              "tool_change_needed": true
+            },
+            {
+              "id": 3,
+              "title": "Schweissen",
+              "base_duration": 10,
+              "tool_change_needed": false
+            }
+          ]
+}
