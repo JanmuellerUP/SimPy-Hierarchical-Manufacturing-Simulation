@@ -17,7 +17,7 @@ class Buffer:
         # State
         self.items_in_storage = []
         self.full = False
-        self.orders_waiting = []
+        self.items_waiting = []
         self.agents_at_position = []
         self.waiting_agents = []
         self.expected_orders = []  # (order, time, agent)
@@ -48,6 +48,24 @@ class Buffer:
     def initial_event(self):
         self.save_event("Initial")
         yield self.env.timeout(0)
+
+    def free_slots(self):
+        return self.STORAGE_CAPACITY > len(self.items_in_storage) - len(
+            [order for order in self.items_in_storage if order.locked_by]) + len(
+            self.expected_orders)
+
+    def item_picked_up(self, item):
+        self.items_in_storage.remove(item)
+        if self.items_waiting:
+            self.items_waiting = sorted(self.items_waiting, key=lambda tup: tup[1])
+            self.items_waiting[0][0].order_arrival()
+            del self.items_waiting[0]
+        else:
+            self.full = False
+            if len(self.waiting_agents) > 0:
+                self.waiting_agents[0].current_waitingtask.interrupt("New space free")
+        self.save_event("item_picked_up", item)
+
 
 
 class QueueBuffer(Buffer):

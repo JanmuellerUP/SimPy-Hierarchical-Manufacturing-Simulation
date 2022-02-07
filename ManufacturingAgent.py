@@ -114,8 +114,9 @@ class ManufacturingAgent:
         """
         try:
             # Check for priority tasks (Free Input, Blocked Items in machines)
+            #print(self, "start new main process", self.env.now, self.picked_up_item, self.locked_item, self.position)
             self.lock.acquire()
-            #print("New Main Process", self, self.env.now, self.current_task, self.current_subtask, self.current_waitingtask)
+
             cell_states = self.CELL.calculate_states(requester=self)
 
             if not self.picked_up_item:
@@ -123,10 +124,15 @@ class ManufacturingAgent:
                 prio_task, prio_order = self.check_priority_tasks(cell_states, ranking)
 
                 # Prefer priority tasks over normal tasks
-                if prio_task:
+                if prio_task == "wait":
+                    task_type = "wait"
+                    next_task = self.env.timeout(5)
+                    next_order = None
+                elif prio_task:
                     next_task = prio_task
                     next_order = prio_order
                     task_type = "prio"
+
                 else:
                     next_task, next_order = self.get_next_task(ranking)
                     task_type = "normal"
@@ -147,6 +153,7 @@ class ManufacturingAgent:
 
                 if next_order:
                     #print("LOCK", self.env.now, self, next_order, "Bisher gelockt:", self.locked_item)
+                    #print(self, "NEW TASK", task_type, next_order, next_order.position)
                     next_order.locked_by = self
                     self.locked_item = next_order
                     self.locked_item.save_event("locked")
@@ -182,6 +189,9 @@ class ManufacturingAgent:
             self.main_proc = self.env.process(self.main_process()) # Start new Main Process
 
     def check_priority_tasks(self, state, ranking):
+        """Check if any critical task should be performed to keep the current cell functioning.
+        This tasks will ignore the ranking and choose the most useful item at this situation"""
+
         expected_orders = state["expected_orders"]
 
         # Keep Input-Buffer free
@@ -191,11 +201,10 @@ class ManufacturingAgent:
             locked_in_used_slots = [order for order in used_slots if order.locked_by]
         else:
             locked_in_used_slots = []
-        expected_orders_input = len([order for (order, time, position, agent) in expected_orders if position is self.CELL.INPUT_BUFFER])
-        if capacity == 1:
+        if capacity == 1 and len(used_slots) > len(locked_in_used_slots):
             input_overcrowded = capacity == len(used_slots) - len(locked_in_used_slots)
         else:
-            input_overcrowded = capacity <= len(used_slots) + expected_orders_input - len(locked_in_used_slots)
+            input_overcrowded = (not self.CELL.INPUT_BUFFER.free_slots()) and len(self.CELL.INPUT_BUFFER.items_in_storage) > 0 and len(used_slots) > len(locked_in_used_slots)
 
         # Keep Machine Output free
         blocked_machines = []
@@ -212,21 +221,14 @@ class ManufacturingAgent:
         blocked_interfaces = []
 
         if self.CELL.INTERFACES_OUT:
-            state_interfaces_out = state["interfaces_out"]
-            interfaces_out = [(interface, data["STORAGE_CAPACITY"], data["items_in_storage"], len(
-                [order for (order, time, position, agent) in expected_orders if position is interface])) for (interface, data) in state_interfaces_out]
-            for interface, capacity, used_slots, num_expected_orders in interfaces_out:
-                if used_slots:
-                    locked_in_used_slots = [order for order in used_slots if order.locked_by]
-                else:
-                    locked_in_used_slots = []
-                interface_overcrowded = capacity <= len(used_slots) + num_expected_orders - len(locked_in_used_slots)
-                if interface_overcrowded:
+            interfaces_out = state["interfaces_out"]
+
+            for interface, data in interfaces_out:
+                if (not interface.free_slots()) and len(interface.items_in_storage) > 0:
                     blocked_interfaces.append(interface)
 
         # Which priority task should be performed?
-        free_output_capacity = self.CELL.OUTPUT_BUFFER.STORAGE_CAPACITY - len(state["output_buffer"][1]["items_in_storage"])
-        if free_output_capacity > 0:
+        if self.CELL.OUTPUT_BUFFER.free_slots():
             if high_blocks or low_blocks:
                 task, order = self.remove_machine_block(high_blocks + low_blocks, ranking)
             elif blocked_interfaces:
@@ -250,7 +252,7 @@ class ManufacturingAgent:
 
     def free_input_space(self, ranking, blocked_machines, blocked_interfaces):
 
-        if self.CELL.STORAGE.STORAGE_CAPACITY > len(self.CELL.STORAGE.items_in_storage):
+        if self.CELL.STORAGE.free_slots():
             # Storage has free Spaces
             next_item = [order for order in ranking if order in self.CELL.INPUT_BUFFER.items_in_storage][-1]
             self.current_task = self.env.process(self.item_from_to(next_item, next_item.position, self.CELL.STORAGE))
@@ -264,6 +266,7 @@ class ManufacturingAgent:
                 if free_slot:
                     self.current_task = self.env.process(self.item_from_to(order, order.position, destination))
                     return self.current_task, order
+
         if blocked_machines:
             return self.remove_machine_block(blocked_machines, ranking)
         elif blocked_interfaces:
@@ -278,7 +281,7 @@ class ManufacturingAgent:
         blocking_items_ranked = [item for item in ranking if item in blocking_items]
 
         # Case 1: Cell output free and finished item blocking other items
-        if self.CELL.OUTPUT_BUFFER.STORAGE_CAPACITY > len(self.CELL.OUTPUT_BUFFER.items_in_storage):
+        if self.CELL.OUTPUT_BUFFER.free_slots():
             for item in blocking_items_ranked:
                 if item.tasks_finished or item.next_task not in [task for (task, amount) in
                                                                    self.CELL.PERFORMABLE_TASKS]:
@@ -293,7 +296,7 @@ class ManufacturingAgent:
                 return self.current_task, item
 
         # Case 3: Free slot in storage buffer
-        if self.CELL.STORAGE.STORAGE_CAPACITY > len(self.CELL.STORAGE.items_in_storage):
+        if self.CELL.STORAGE.free_slots():
             prio_item = blocking_items_ranked[-1]
             self.current_task = self.env.process(self.item_from_to(prio_item, prio_item.position, self.CELL.STORAGE))
             return self.current_task, prio_item
@@ -306,7 +309,8 @@ class ManufacturingAgent:
         blocking_items_ranked = [item for item in ranking if item in blocking_items]
 
         # Case 1: Cell output free and finished item blocking other items
-        if self.CELL.OUTPUT_BUFFER.STORAGE_CAPACITY > len(self.CELL.OUTPUT_BUFFER.items_in_storage):
+        if self.CELL.OUTPUT_BUFFER.free_slots():
+
             # Prüfe ob eines der blockierenden Items fertiggestellt ist
             for item in blocking_items_ranked:
                 if item.tasks_finished or item.next_task not in [task for (task, amount) in
@@ -322,10 +326,14 @@ class ManufacturingAgent:
                 return self.current_task, item
 
         # Case 3: Free slot in storage buffer
-        if self.CELL.STORAGE.STORAGE_CAPACITY > len(self.CELL.STORAGE.items_in_storage):
+        if self.CELL.STORAGE.free_slots():
             blocked_items = [machine.item_in_machine for machine in blocks] + [machine.item_in_input for machine in blocks if machine.item_in_input]
-            blocked_items_ranked = [order for order in ranking if order in blocked_items]
-            prio_item = blocked_items_ranked[0].position.item_in_output
+            blocked_and_locked = [item for item in blocked_items if item.locked_by]
+            if blocked_and_locked:
+                prio_item = blocked_and_locked[0].position.item_in_output
+            else:
+                blocked_items_ranked = [order for order in ranking if order in blocked_items]
+                prio_item = blocked_items_ranked[0].position.item_in_output
 
             self.current_task = self.env.process(self.item_from_to(prio_item, prio_item.position, self.CELL.STORAGE))
             return self.current_task, prio_item
@@ -335,6 +343,7 @@ class ManufacturingAgent:
 
     def free_storage_space(self, ranking, blocking_items):
         storage_items_ranked = [item for item in ranking if item in self.CELL.STORAGE.items_in_storage]
+
         for order in storage_items_ranked:
             destination, free_slot = self.calculate_destination(order)
             if free_slot:
@@ -349,14 +358,20 @@ class ManufacturingAgent:
                 self.current_subtask = self.env.process(self.moving_proc(item.position))
                 return self.current_subtask, None
 
-        self.current_subtask = self.env.process(self.moving_proc(blocking_items[0].position))
-        return self.current_subtask, None
+        if self.position is not blocking_items[0].position:
+            self.current_subtask = self.env.process(self.moving_proc(blocking_items[0].position))
+            return self.current_subtask, None
+        else:
+            return "wait", None
 
     def calculate_destination(self, order):
+        """Calculate the best next position for an agent to bring the order"""
 
+        # Check if order is currently at a machine. If so the next task of the order is the one after the current one
         if isinstance(order.position, Machine):
             if (
                     order == order.position.item_in_input or order == order.position.item_in_machine) and order.next_task == order.position.PERFORMABLE_TASK:
+
                 if len(order.remaining_tasks) > 1:
                     next_processing_step = order.remaining_tasks[1]
                     next_steps = order.remaining_tasks[1:]
@@ -365,20 +380,25 @@ class ManufacturingAgent:
                     next_processing_step = None
                     next_steps = []
                     tasks_finished = True
+
             else:
                 next_processing_step = order.next_task
                 next_steps = order.remaining_tasks
                 tasks_finished = False
+
         else:
             next_processing_step = order.next_task
             next_steps = order.remaining_tasks
 
             tasks_finished = False
 
+        # Bring finished orders and orders that can not be performed in this cell always to the cell output buffer
         if order.tasks_finished or tasks_finished or next_processing_step not in [task for (task, amount) in self.CELL.PERFORMABLE_TASKS if amount > 0]:
             destination = self.CELL.OUTPUT_BUFFER
             free_slot = len(destination.items_in_storage) < destination.STORAGE_CAPACITY
             return destination, free_slot
+
+        # Order is in machine cell
         elif self.CELL.MACHINES:
 
             potential_machines = [machine for machine in self.CELL.MACHINES if
@@ -389,6 +409,7 @@ class ManufacturingAgent:
 
             destination = [machine for (machine, item_in_input, processing_time) in potential_times if not item_in_input]
             free_slot = True
+
             if not destination:
                 destination = potential_times[0][0]
                 free_slot = False
@@ -397,18 +418,22 @@ class ManufacturingAgent:
             return destination[0], free_slot
 
         else:
-            #Distributionszelle
+            # Order is in distribution cell
+
             possibilities = []
+
             for cell in self.CELL.CHILDS:
                 possibilities.append((cell, cell.check_best_path(order, include_all=False), cell.PERFORMABLE_TASKS))
-            best_possibilities = sorted([(cell, shortest_path, cell.INPUT_BUFFER.STORAGE_CAPACITY - len(cell.INPUT_BUFFER.items_in_storage)) for (cell, shortest_path, performable_tasks) in possibilities if shortest_path], key=lambda tup: tup[1])
+            best_possibilities = sorted([(cell, shortest_path, cell.INPUT_BUFFER.free_slots()) for (cell, shortest_path, performable_tasks) in possibilities if shortest_path], key=lambda tup: tup[1])
+
             if best_possibilities:
-                destination = [cell for (cell, shortest_path, free_spaces) in best_possibilities if free_spaces > 0]
+                destination = [cell for (cell, shortest_path, free_slots) in best_possibilities if free_slots]
                 free_slot = True
             else:
                 # Prefer the one that can perform the most continuous tasks and has a free Input Slot.
                 result = [(cell, consecutive_performable_tasks(next_steps, performable_tasks)) for (cell, shortest_path, performable_tasks) in possibilities]
                 result = sorted([(cell, amount) for (cell, amount) in result if amount > 0], key=lambda tup: tup[1], reverse=True)
+
                 if result:
                     best_cell, amount = result[0]
                     for cell, amount in result:
@@ -416,10 +441,12 @@ class ManufacturingAgent:
                             best_cell = cell
                             break
                     return best_cell.INPUT_BUFFER, not best_cell.INPUT_BUFFER.full
+
             if not destination:
                 destination = possibilities[0][0].INPUT_BUFFER
                 free_slot = False
                 return destination, free_slot
+
             return destination[0].INPUT_BUFFER, free_slot
 
     def rank_order(self, cell_state):
@@ -481,20 +508,37 @@ class ManufacturingAgent:
 
     def get_next_task(self, ranking):
         """Check which Task should be performed next based on a ranked order list"""
+
         if ranking:
+            # There are non locked orders within the cell
             next_order = ranking[0]
             destination, free_slot = self.calculate_destination(next_order)
 
+            for order in ranking:
+                dest, f_slot = self.calculate_destination(order)
+                if f_slot:
+                    next_order = order
+                    free_slot = f_slot
+                    destination = dest
+                    break
+
             if next_order == self.picked_up_item:
+                # Next order is already picked up
                 time, over_pos = self.time_for_distance(destination)
                 if over_pos:
+                    # Use an over position
                     from_pos = over_pos
                 else:
+                    # Start from current position
                     from_pos = self.position
                 self.current_task = self.env.process(
                 self.item_from_to(next_order, from_pos, destination, over_pos))
             else:
-                self.current_task = self.env.process(self.item_from_to(next_order, next_order.position, destination))
+                if self.position:
+                    over_pos = None
+                else:
+                    time, over_pos = self.time_for_distance(next_order.position)
+                self.current_task = self.env.process(self.item_from_to(next_order, next_order.position, destination, over_pos=over_pos))
             return self.current_task, next_order
         else:
             # There is currently no Order available
@@ -543,6 +587,7 @@ class ManufacturingAgent:
                     self.moving_start_time = self.env.now - self.remaining_moving_time
 
                     self.remaining_moving_time = self.moving_time - self.remaining_moving_time
+                self.moving = True
 
             if announce:
                 #print(self, "Announce!")
@@ -606,15 +651,18 @@ class ManufacturingAgent:
                     elif destination.upper_cell is not None:
                         destination.upper_cell.cancel_incoming_order(self.picked_up_item)
                 if isinstance(destination, Machine):
-                    destination.cancel_expected_order(self.picked_up_item)
+                    #print("Remove from Machine", destination, self.picked_up_item)
+                    self.env.process(destination.cancel_expected_order(self.picked_up_item))
             self.save_event("moving_interrupted")
 
     def pick_up(self, item):
         """SUBTASK: Pick up item from position if inventory is empty"""
         try:
+            #print(self, self.position == item.position)
             if self.picked_up_item is None:
                 if isinstance(self.position, Machine):
                     if self.position.item_in_output != item:
+                        #print(self.position,"Agent begins to wait", self.env.now, item, item.position, self.position.item_in_input, self.position.item_in_machine, self.position.item_in_output)
                         self.current_waitingtask = self.env.process(self.wait_for_item_processing(item, self.position))
                         yield self.current_waitingtask
                     if self.position.item_in_output == item:
@@ -628,6 +676,7 @@ class ManufacturingAgent:
                             self.position.wait_for_output_proc.interrupt("Output free again")
                         item.save_event("picked_up")
                         self.save_event("pick_up_end")
+                        self.position.save_event("item_picked_up")
 
                 if isinstance(self.position, Buffer):
                     #print(self, "Position Buffer", item, item.locked_by==self, self.position.items_in_storage)
@@ -636,14 +685,11 @@ class ManufacturingAgent:
                         yield self.env.timeout(self.TIME_FOR_ITEM_PICK_UP)
                         self.picked_up_item = item
                         item.picked_up_by = self
-                        self.position.items_in_storage.remove(item)
-                        self.position.full = False
-                        if len(self.position.waiting_agents) > 0:
-                            self.position.waiting_agents[0].current_waitingtask.interrupt("New space free")
-                        self.position.save_event("item_picked_up", item)
+                        self.position.item_picked_up(item)
                         item.position = None
                         item.save_event("picked_up")
                         self.save_event("pick_up_end")
+
             self.CELL.recalculate_agents()
             self.current_subtask = None
         except simpy.Interrupt as interruption:
@@ -655,30 +701,42 @@ class ManufacturingAgent:
     def store_item(self):
         """SUBTASK: Put down item and inform Position"""
         try:
+            #print(self, self.env.now,"STORE", self.picked_up_item, self.position)
             item = self.picked_up_item
             if isinstance(self.position, Machine):
-                if self.position.item_in_input: # Position besetzt
+                if self.position.item_in_input or self.position.input_lock: # Position besetzt
                     self.current_waitingtask = self.env.process(self.wait_for_free_slot())
                     yield self.current_waitingtask
                     #print(self, "MARKER1", self.picked_up_item)
                     self.current_subtask = self.env.process(self.store_item())
                     yield self.current_subtask
-                    #print(self, "Neuer Store Auftrag abgeschlossen")
                     return
                 else:
                     self.save_event("store_item_start")
 
+                    if not self.picked_up_item:
+                        print("Agent tries to store an item he has not picked up. Save logs into error files.")
+                        pd.read_sql_query(
+                            "SELECT * FROM agent_events WHERE agent={object}"
+                                .format(object=id(self)), self.SIMULATION_ENVIRONMENT.db_con).to_excel("data/error_log_agent.xlsx")
+                        pd.read_sql_query(
+                            "SELECT * FROM item_events WHERE item={object}"
+                                .format(object=id(self.locked_item)), self.SIMULATION_ENVIRONMENT.db_con).to_excel("data/error_log_order.xlsx")
+                        pd.read_sql_query(
+                            "SELECT * FROM machine_events WHERE machine={object}"
+                                .format(object=id(self.position)), self.SIMULATION_ENVIRONMENT.db_con).to_excel("data/error_log_machine.xlsx")
+
                     if self.picked_up_item.next_task is not self.position.PERFORMABLE_TASK:
                         raise Exception("Placed item in wrong machine. Next task can not be performed by this machine!", self.picked_up_item, self.position, self)
 
+                    self.position.input_lock = True
                     yield self.env.timeout(self.TIME_FOR_ITEM_STORE)
-                    #print("Store Item in Machine:", self, self.env.now, "ITEM:", self.picked_up_item, "Machine:", self.position.next_expected_order, self.position.expected_orders, "Plausibel:", self.picked_up_item == self.position.next_expected_order)
-                    #print("Maschine", self.position.item_in_input, self.position.item_in_machine, self.position.setup, self.position.manufacturing, self.position.wait_for_item_proc)
-                    #print(self, self.env.now, "REMOVE1", item, "from", self.position.expected_orders, self.position)
+                    self.position.input_lock = False
+
                     self.position.expected_orders.remove(
                         [(order, time, agent) for order, time, agent in self.position.expected_orders if
                          order == item][0])
-                    #print(self, self.env.now, "RESULT:", self.position.expected_orders)
+
                     self.position.item_in_input = item
                     if self.position.wait_for_item_proc:
                         self.position.wait_for_item_proc.interrupt("Order arrived")
@@ -691,10 +749,10 @@ class ManufacturingAgent:
                 if not self.position.full:
                     self.save_event("store_item_start")
                     yield self.env.timeout(self.TIME_FOR_ITEM_STORE)
-                    #print("REMOVE1", item, self, self.position.expected_orders)
+
                     self.position.expected_orders.remove(
                         [(order, time, agent) for order, time, agent in self.position.expected_orders if order == item][0])
-                    #print("RESULT", self.position.expected_orders)
+
                     self.position.items_in_storage.append(item)
                     if len(self.position.items_in_storage) == self.position.STORAGE_CAPACITY:
                         self.position.full = True
@@ -716,13 +774,12 @@ class ManufacturingAgent:
 
                     self.position.save_event("item_stored", item)
                 else: # Position besetzt
-                    #print(self, "start waiting", self.picked_up_item)
+
                     self.current_waitingtask = self.env.process(self.wait_for_free_slot())
                     yield self.current_waitingtask
-                    #print(self, "MARKER2", self.picked_up_item, self.env.now)
+                    #print(self, "MARKER2", self.picked_up_item)
                     self.current_subtask = self.env.process(self.store_item())
                     yield self.current_subtask
-                    #print(self, "Neuer Store Auftrag abgeschlossen")
                     return
             #print(self,"ITEM abgelegt!", self.env.now)
             self.picked_up_item = None
@@ -730,6 +787,7 @@ class ManufacturingAgent:
             self.current_subtask = None
             item.save_event("put_down")
             self.save_event("store_item_end")
+            self.position.save_event("item_stored")
         except simpy.Interrupt as interruption:
             self.save_event("store_item_interruption")
             self.current_subtask = None
@@ -749,6 +807,7 @@ class ManufacturingAgent:
             while True:
                 yield self.env.timeout(100000)
         except simpy.Interrupt as interruption:
+            #print("Interrupt waiting agent at", self.position, self.env.now)
             self.current_waitingtask = None
             self.waiting = False
             item.waiting_agent_pos.remove((self, pos))
@@ -762,7 +821,9 @@ class ManufacturingAgent:
             self.position.waiting_agents.append(self)
             self.waiting = True
             self.save_event("wait_for_slot_start")
+
             yield self.env.timeout(self.LONGEST_WAITING_TIME)
+
             self.waiting = False
             self.save_event("wait_for_slot_timeout")
             self.recalculate()
@@ -778,7 +839,11 @@ class ManufacturingAgent:
     def item_from_to(self, item, from_pos, to_pos, over_pos=None):
         """TASK: Get an item from position and put it down on another position within the same cell"""
         try:
-            #print("FROM-TO:", self, item, from_pos, to_pos, over_pos)
+            #print(self, "FROM-TO:", item, from_pos, to_pos, "over", over_pos)
+            #print(self, "ITEM at", item.position, "locked by", item.locked_by, "pciked up by", item.picked_up_by)
+            #print(self, "Agent Position", self.position, self.remaining_moving_time, self.picked_up_item)
+            #if isinstance(from_pos, Machine):
+                #print(self, "item in machine:", from_pos.item_in_input, from_pos.item_in_machine, from_pos.item_in_output)
             if over_pos:
                 if over_pos == to_pos:
                     self.current_subtask = self.env.process(self.moving_proc(over_pos, announce=True))
@@ -789,7 +854,7 @@ class ManufacturingAgent:
             if self.position != from_pos:
                 self.current_subtask = self.env.process(self.moving_proc(from_pos))
                 yield self.current_subtask
-            if isinstance(from_pos, Machine):
+            if isinstance(from_pos, Machine) and from_pos != to_pos:
                 if item is not from_pos.item_in_output:
                     item.waiting_agent = (self, from_pos)
                     self.current_waitingtask = self.env.process(self.wait_for_item_processing(item, from_pos))
@@ -797,10 +862,8 @@ class ManufacturingAgent:
             if not self.picked_up_item:
                 self.current_subtask = self.env.process(self.pick_up(item))
                 yield self.current_subtask
-                #print(self, "Picked up", self.picked_up_item, self.position, item.position, self.current_subtask, self.current_waitingtask)
             self.current_subtask = self.env.process(self.moving_proc(to_pos, announce=True))
             yield self.current_subtask
-            #print(self, "MARKER3", self.picked_up_item, self.env.now)
             self.current_subtask = self.env.process(self.store_item())
             yield self.current_subtask
 

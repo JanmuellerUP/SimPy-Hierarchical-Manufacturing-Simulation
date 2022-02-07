@@ -1,7 +1,7 @@
 import sqlite3
 import os
 import time
-
+import shutil
 import pandas as pd
 
 
@@ -90,14 +90,27 @@ def set_up_db(sim_env):
     return db_con, db_cu
 
 
-def save_as_excel(sim_env):
+def save_as_excel(sim_env, run):
     print("\nSave database tables as xlsx-files for further exploration")
     start_time = time.time()
     sim_env.db_cu.execute("SELECT name FROM sqlite_master WHERE type='table'")
     data = sim_env.db_cu.fetchall()
+    directory = "data/{}".format("sim_run_"+str(run))
+
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     for table in data:
-        pd.read_sql_query("SELECT * from {table}".format(table=table[0]), sim_env.db_con).to_excel("data/{table}.xlsx".format(table=table[0]))
+        pd.read_sql_query("SELECT * from {table}".format(table=table[0]), sim_env.db_con).to_excel("{directory}/{table}.xlsx".format(directory=directory, table=table[0]))
     print("Saving finished in %d seconds!" % (time.time() - start_time))
+
+
+def clear_files():
+    for root, dirs, files in os.walk('data'):
+        for f in files:
+            os.unlink(os.path.join(root, f))
+        for d in dirs:
+            shutil.rmtree(os.path.join(root, d))
 
 
 def close_connection(sim_env):

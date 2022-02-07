@@ -4,45 +4,26 @@ import numpy as np
 from Order import Order, OrderType
 
 
-def stats_all_orders(all_orders):
-    completed_orders = [order for order in all_orders if order.completed]
-    completed_in_time = [order for order in completed_orders if not order.overdue]
-    tardiness = [order.due_to - order.completed_at for order in completed_orders]
-    delays = list(filter(lambda tard: tard >= 0, tardiness))
-
-    print("\nFinished {completed} from {total} started orders.".format(completed=len(completed_orders), total=len(all_orders)))
-    print("{on_time} orders where finished on time ({percentage} %).".format(on_time=len(completed_in_time), percentage=round((len(completed_in_time)/len(completed_orders))*100, 2)))
-    print("Completed Orders mean delay: {mean_delay}".format(mean_delay=round(statistics.mean(delays), 2)))
-    print("Completed Orders mean tardiness: {mean_tardiness}".format(mean_tardiness=round(statistics.mean(tardiness), 2)))
-
-
-def stats_all_agents(all_agents):
-    for agent in all_agents:
-        print("\nAgent:", agent)
-        print("Started normal Tasks: {started_normal} Started prio Tasks: {started_prio}".
-              format(started_normal=agent.started_normal_tasks, started_prio=agent.started_prio_tasks))
-
-
-def machine_measures(sim_env, machine, measures=[]):
+def machine_measures(sim_env, obj, measures=[]):
     db_con = sim_env.db_con
     simulation_length = sim_env.SIMULATION_TIME_RANGE
     result = {}
-    event_counts = event_count_single_object("machine", machine, db_con)
+    event_counts = event_count_single_object("machine", obj, db_con)
 
     def setup_events():
         return event_counts[(event_counts["event"] == "setup_start")]["#events"].values[0]
 
     def setup_time():
-        return boolean_times_single_object("machine", machine, "setup", db_con)
+        return boolean_times_single_object("machine", obj, "setup", db_con)
 
     def idle_time():
-        return boolean_times_single_object("machine", machine, "idle", db_con)
+        return boolean_times_single_object("machine", obj, "idle", db_con)
 
     def pick_up_time():
-        return boolean_times_single_object("machine", machine, "load_item", db_con)
+        return boolean_times_single_object("machine", obj, "load_item", db_con)
 
     def processing_time():
-        return boolean_times_single_object("machine", machine, "manufacturing", db_con)
+        return boolean_times_single_object("machine", obj, "manufacturing", db_con)
 
     def processed_quantity():
         return event_counts[(event_counts["event"] == "production_start")]["#events"].values[0]
@@ -51,23 +32,39 @@ def machine_measures(sim_env, machine, measures=[]):
         return event_counts[(event_counts["event"] == "production_end")]["#events"].values[0]
 
     def time_to_repair():
-        return boolean_times_single_object("machine", machine, "repair", db_con)
+        if failure_events():
+            return boolean_times_single_object("machine", obj, "repair", db_con)
+        else:
+            return 0
 
     def failure_events():
-        return event_counts[(event_counts["event"] == "failure_start")]["#events"].values[0]
+        failures = event_counts[event_counts["event"] == "failure_start"]
+        if not failures.empty:
+            return failures["#events"].values[0]
+        else:
+            return 0
 
     def mean_time_between_failure():
-        return (simulation_length - time_to_repair())/failure_events()
+        if failure_events():
+            return (simulation_length - time_to_repair())/failure_events()
+        else:
+            return None
 
     def mean_processing_time_between_failure():
-        return processing_time()/failure_events()
+        if failure_events():
+            return processing_time()/failure_events()
+        else:
+            return None
 
     def mean_time_to_repair():
-        starts = event_times_single_object("machine", machine, "failure_start", db_con)
-        ends = event_times_single_object("machine", machine, "failure_end", db_con)
-        df = pd.merge(starts, ends, left_index=True, right_index=True)
-        df["time_to_repair"] = df["time_y"] - df["time_x"]
-        return df["time_to_repair"].mean()
+        if failure_events():
+            starts = event_times_single_object("machine", obj, "failure_start", db_con)
+            ends = event_times_single_object("machine", obj, "failure_end", db_con)
+            df = pd.merge(starts, ends, left_index=True, right_index=True)
+            df["time_to_repair"] = df["time_y"] - df["time_x"]
+            return df["time_to_repair"].mean()
+        else:
+            return None
 
     def availability():
         return ((simulation_length - time_to_repair())/simulation_length) * 100
@@ -78,41 +75,41 @@ def machine_measures(sim_env, machine, measures=[]):
     return result
 
 
-def order_measures(sim_env, order, measures=[]):
+def order_measures(sim_env, obj, measures=[]):
     db_con = sim_env.db_con
     simulation_length = sim_env.SIMULATION_TIME_RANGE
     result = {}
-    event_counts = event_count_single_object("item", order, db_con)
+    event_counts = event_count_single_object("item", obj, db_con)
 
     def completion_time():
-        if order.completed_at:
-            return order.completed_at - order.start
+        if obj.completed_at:
+            return obj.completed_at - obj.start
         else:
             return None
 
     def tardiness():
-        if order.completed_at and order.overdue:
-            return order.completed_at - order.due_to
+        if obj.completed_at and obj.overdue:
+            return obj.completed_at - obj.due_to
         else:
             return None
 
     def lateness():
-        if order.completed_at:
-            return order.completed_at - order.due_to
+        if obj.completed_at:
+            return obj.completed_at - obj.due_to
         else:
             return None
 
     def transportation_time():
-        return boolean_times_single_object("item", order, "transportation", db_con)
+        return boolean_times_single_object("item", obj, "transportation", db_con)
 
     def average_transportation_time():
         return transportation_time()/event_counts[(event_counts["event"] == "transportation_start")]["#events"].values[0]
 
     def time_at_pos():
-        return time_by_dimension("item", order, "position", db_con)
+        return time_by_dimension("item", obj, "position", db_con)
 
     def time_at_pos_type():
-        return time_by_dimension("item", order, "position_type", db_con)
+        return time_by_dimension("item", obj, "position_type", db_con)
 
     def time_at_machines():
         df = time_at_pos_type()
@@ -127,19 +124,22 @@ def order_measures(sim_env, order, measures=[]):
     def time_in_queue_buffer():
         df = time_at_pos_type()
         result = df[df["position_type"] == "QueueBuffer"]
-        return result["length"].iloc[0]
+        if not result.empty:
+            return result["length"].iloc[0]
+        else:
+            return 0
 
     def production_time():
-        return boolean_times_single_object("item", order, "processing", db_con) - wait_for_repair_time()
+        return boolean_times_single_object("item", obj, "processing", db_con) - wait_for_repair_time()
 
     def wait_for_repair_time():
-        return boolean_times_single_object("item", order, "wait_for_repair", db_con)
+        return boolean_times_single_object("item", obj, "wait_for_repair", db_con)
 
     def time_in_cells():
-        return time_by_dimension("item", order, "cell", db_con)
+        return time_by_dimension("item", obj, "cell", db_con)
 
     def different_cells_run_through():
-        df = pd.read_sql_query("SELECT COUNT(DISTINCT cell) as 'amount' FROM item_events WHERE item={object}".format(object=id(order)), db_con)
+        df = pd.read_sql_query("SELECT COUNT(DISTINCT cell) as 'amount' FROM item_events WHERE item={object}".format(object=id(obj)), db_con)
         return df["amount"].iloc[0]
 
     for measure in measures:
@@ -148,34 +148,37 @@ def order_measures(sim_env, order, measures=[]):
     return result
 
 
-def agent_measures(sim_env, agent, measures=[]):
+def agent_measures(sim_env, obj, measures=[]):
     db_con = sim_env.db_con
     simulation_length = sim_env.SIMULATION_TIME_RANGE
     result = {}
-    event_counts = event_count_single_object("agent", agent, db_con)
+    event_counts = event_count_single_object("agent", obj, db_con)
 
     def moving_time():
-        return boolean_times_single_object("agent", agent, "moving", db_con)
+        return boolean_times_single_object("agent", obj, "moving", db_con)
 
     def transportation_time():
         df = pd.read_sql_query(
-            "SELECT time, moving, picked_up_item FROM agent_events WHERE agent={object} and picked_up_item NOT NULL".format(object=id(agent)), db_con)
+            "SELECT time, moving, picked_up_item FROM agent_events WHERE agent={object} and picked_up_item NOT NULL".format(object=id(obj)), db_con)
         df = remove_events_without_changes(df, "moving")
         df["length"] = df["time"].shift(periods=-1, axis=0) - df["time"]
         result = df.groupby(["moving"], as_index=False)["length"].sum()
         return result[result["moving"] == 1]["length"].values[0]
 
     def waiting_time():
-        return boolean_times_single_object("agent", agent, "waiting", db_con)
+        return boolean_times_single_object("agent", obj, "waiting", db_con)
 
     def idle_time():
         return simulation_length - task_time()
 
     def task_time():
-        return boolean_times_single_object("agent", agent, "task", db_con)
+        return boolean_times_single_object("agent", obj, "task", db_con)
 
     def started_prio_tasks():
-        return event_counts[(event_counts["event"] == "start_prio_task")]["#events"].values[0]
+        if event_counts[(event_counts["event"] == "start_prio_task")].empty:
+            return 0
+        else:
+            return event_counts[(event_counts["event"] == "start_prio_task")]["#events"].values[0]
 
     def started_normal_tasks():
         return event_counts[(event_counts["event"] == "start_normal_task")]["#events"].values[0]
@@ -184,7 +187,7 @@ def agent_measures(sim_env, agent, measures=[]):
         return task_time()/(started_normal_tasks() + started_prio_tasks())
 
     def time_at_pos():
-        return time_by_dimension("agent", agent, "position", db_con)
+        return time_by_dimension("agent", obj, "position", db_con)
 
     for measure in measures:
         result[measure] = locals()[measure]()
@@ -192,26 +195,26 @@ def agent_measures(sim_env, agent, measures=[]):
     return result
 
 
-def buffer_measures(sim_env, buffer, measures=[]):
+def buffer_measures(sim_env, obj, measures=[]):
     db_con = sim_env.db_con
     simulation_length = sim_env.SIMULATION_TIME_RANGE
     result = {}
-    event_counts = event_count_single_object("buffer", buffer, db_con)
-    capacity = buffer.STORAGE_CAPACITY
+    event_counts = event_count_single_object("buffer", obj, db_con)
+    capacity = obj.STORAGE_CAPACITY
 
     def time_full():
-        return boolean_times_single_object("buffer", buffer, "full", db_con)
+        return boolean_times_single_object("buffer", obj, "full", db_con)
 
     def overfill_rate():
-        return (time_full/simulation_length)*100
+        return (time_full()/simulation_length)*100
 
     def mean_items_in_storage():
-        df = time_by_dimension("buffer", buffer, "items_in_storage", db_con)
+        df = time_by_dimension("buffer", obj, "items_in_storage", db_con)
         df["factor"] = df["length"] * df["items_in_storage"]
         return df["factor"].sum()/simulation_length
 
     def mean_time_in_storage():
-        df = time_by_dimension("buffer", buffer, "event_item", db_con)
+        df = time_by_dimension("buffer", obj, "event_item", db_con)
         return df["length"].mean()
 
     for measure in measures:
@@ -220,10 +223,10 @@ def buffer_measures(sim_env, buffer, measures=[]):
     return result
 
 
-def cell_measures(sim_env, cell, measures=[]):
+def cell_measures(sim_env, obj, measures=[]):
     db_con = sim_env.db_con
     simulation_length = sim_env.SIMULATION_TIME_RANGE
-    orders = pd.read_sql_query("SELECT DISTINCT item as item FROM item_events WHERE cell={}".format(id(cell)), db_con)["item"]
+    orders = pd.read_sql_query("SELECT DISTINCT item as item FROM item_events WHERE cell={}".format(id(obj)), db_con)["item"]
     result = {}
 
     def mean_time_in_cell():
@@ -231,7 +234,7 @@ def cell_measures(sim_env, cell, measures=[]):
 
         for order_id in orders:
             df = time_by_dimension("item", order_id, "cell", db_con, object_as_id=True)
-            results.append(df[df["cell"] == id(cell)]["length"].iloc[0])
+            results.append(df[df["cell"] == id(obj)]["length"].iloc[0])
 
         return statistics.mean(results)
 
@@ -239,12 +242,13 @@ def cell_measures(sim_env, cell, measures=[]):
         return (len(orders) * mean_time_in_cell())/simulation_length
 
     def capacity():
-        cap = cell.INPUT_BUFFER.STORAGE_CAPACITY + cell.OUTPUT_BUFFER.STORAGE_CAPACITY + cell.STORAGE.STORAGE_CAPACITY
-        if cell.MACHINES:
-            cap += len(cell.MACHINES) * 3
-        if cell.INTERFACES_IN:
-            cap += sum([interface.STORAGE_CAPACITY for interface in cell.INTERFACES_IN])
-            cap += sum([interface.STORAGE_CAPACITY for interface in cell.INTERFACES_OUT])
+        cap = obj.INPUT_BUFFER.STORAGE_CAPACITY + obj.OUTPUT_BUFFER.STORAGE_CAPACITY + obj.STORAGE.STORAGE_CAPACITY
+        if obj.MACHINES:
+            cap += len(obj.MACHINES) * 3
+        if obj.INTERFACES_IN:
+            cap += sum([interface.STORAGE_CAPACITY for interface in obj.INTERFACES_IN])
+            cap += sum([interface.STORAGE_CAPACITY for interface in obj.INTERFACES_OUT])
+        #cap += len(cell.AGENTS)
         return cap
 
     def storage_utilization():
@@ -256,7 +260,7 @@ def cell_measures(sim_env, cell, measures=[]):
     return result
 
 
-def global_measures(sim_env, measures=[]):
+def simulation_measures(sim_env, measures=[]):
     db_con = sim_env.db_con
     simulation_length = sim_env.SIMULATION_TIME_RANGE
     orders = [order for order in Order.instances if order.SIMULATION_ENVIRONMENT == sim_env]
@@ -328,7 +332,10 @@ def boolean_times_single_object(focus: str, object, measure: str, db_con, period
     if periods == 1:
         df["length"] = df["time"].shift(periods=-1, axis=0) - df["time"]
         result = df.groupby([measure], as_index=False)["length"].sum()
-        result = result[result[measure] == 1]["length"].values[0]
+        if result[result[measure] == 1].empty:
+            result = 0
+        else:
+            result = result[result[measure] == 1]["length"].values[0]
     else:
         df = add_time_periods(df, periods)
         df["length"] = df["time"].shift(periods=-1, axis=0) - df["time"]

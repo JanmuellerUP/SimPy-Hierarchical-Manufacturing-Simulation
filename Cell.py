@@ -1,5 +1,5 @@
 from ManufacturingAgent import ManufacturingAgent
-from Buffer import InterfaceBuffer, QueueBuffer
+from Buffer import Buffer, InterfaceBuffer, QueueBuffer
 import Machine
 from ProcessingStep import ProcessingStep
 import itertools
@@ -138,6 +138,9 @@ class ManufacturingCell(Cell):
         self.STORAGE.RESPONSIBLE_AGENTS = self.AGENTS
         for machine in self.MACHINES:
             machine.RESPONSIBLE_AGENTS = self.AGENTS
+        for agent in self.AGENTS:
+            agent.position = self.INPUT_BUFFER
+            self.INPUT_BUFFER.agents_at_position.append(agent)
 
     def init_performable_tasks(self):
         """Initialize self.PERFORMABLE_TASKS:
@@ -241,6 +244,9 @@ class DistributionCell(Cell):
         self.INPUT_BUFFER.RESPONSIBLE_AGENTS = self.AGENTS
         self.OUTPUT_BUFFER.RESPONSIBLE_AGENTS = self.AGENTS
         self.STORAGE.RESPONSIBLE_AGENTS = self.AGENTS
+        for agent in self.AGENTS:
+            agent.position = self.INPUT_BUFFER
+            self.INPUT_BUFFER.agents_at_position.append(agent)
 
     def init_performable_tasks(self):
         """Initialize self.PERFORMABLE_TASKS:

@@ -31,45 +31,7 @@ def show_progress_func(env, sim_env):
     while counter <= periods:
         yield env.timeout(period_length)
         print("Finished", (100/periods)*(counter), "% of the simulation!")
-        counter +=1
-
-
-def test_function(env: simpy.Environment, sim_env):
-    yield env.timeout(10)
-    #print("---------------------------------------------")
-    #for cell in Cell.Cell.instances:
-    #    print("Time:", env.now, "Cell:", cell, "Order in Cell:", cell.orders_in_cell, "Expected Orders:", cell.expected_orders)
-    #print("---------------------------------------------")
-    #for agent in Cell.ManufacturingAgent.instances:
-    #    print("Time:", env.now, "Agent:", agent, "Main Proc:", agent.main_proc, "Tasks:", agent.current_task, agent.current_subtask, agent.current_waitingtask, "Held Item:", agent.picked_up_item)
-    #print("---------------------------------------------")
-    #for order in Order.instances:
-    #    print("Time:", env.now, "Order:", order, "locked by", order.locked_by, "and next locked by", order.next_locked_by, "Waiting agent:", order.waiting_agent_pos, "Next_Task:", order.next_task, order.remaining_tasks, "Type Schedule", order.type.work_schedule, order.work_schedule)
-    print("---------------------------------------------")
-    for machine in Cell.Machine.Machine.instances:
-        print(machine, machine.PERFORMABLE_TASK, machine.item_in_input, machine.item_in_machine, machine.item_in_output, machine.idle)
-    env.process(test_function(env, sim_env))
-
-
-def check_environment(simulation_environment):
-    print("\nCheck Environment for Simulation:\n")
-
-    for item in [order for order in Order.instances]:
-        print(item, item.position, item.current_cell, item.blocked_by, item.locked_by, item.picked_up_by, item.next_task, item.remaining_tasks)
-
-    return
-    for interface in Cell.InterfaceBuffer.instances:
-        print(interface, interface.items_in_storage, interface.STORAGE_CAPACITY)
-
-    for machine in Cell.Machine.Machine.instances:
-        print(machine, machine.item_in_input, machine.item_in_machine, machine.item_in_output, machine.idle)
-
-    for agent in Cell.ManufacturingAgent.instances:
-        print(agent, agent.current_task, agent.current_subtask, agent.current_waitingtask, agent.position)
-
-    exit()
-    for order in Order.finished_instances:
-        print(order, order.completed, order.start, order.completed_at, order.due_to, order.overdue, order.tasks_finished, order.remaining_tasks, order.next_task, order.position)
+        counter += 1
 
 
 def new_cell_setup(config):
@@ -342,23 +304,15 @@ def get_tree_levels(main_cell):
     return tree
 
 
-def set_tree_levels(tree):
-    """Set the tree level of each cell in the tree"""
+def finish_setup(tree):
+    """Set the tree level of each cell in the tree, init agents and performable tasks"""
     level = 0
     for cells_of_level in tree:
-        for cells in cells_of_level:
-            cells.LEVEL = level
+        for cell in cells_of_level:
+            cell.LEVEL = level
+            cell.init_responsible_agents()
+            cell.init_performable_tasks()
         level += 1
-
-
-def set_agents_positions(cell):
-    """Recursive: Initialize agent position to Inputbuffer of the cell. Start again with all child cells."""
-    for agent in cell.AGENTS:
-        agent.position = cell.INPUT_BUFFER
-        cell.INPUT_BUFFER.agents_at_position.append(agent)
-    if isinstance(cell, Cell.DistributionCell):
-        for child in cell.CHILDS:
-            set_agents_positions(child)
 
 
 def calculate_distances_tree(config, tree):
@@ -449,14 +403,4 @@ def set_env_in_components(sim_env, cell):
     for interface in cell.INTERFACES_OUT:
         interface.SIMULATION_ENVIRONMENT = sim_env
         interface.CELL = cell
-
-
-def init_cells_responsible_agents():
-    for cell in Cell.Cell.instances:
-        cell.init_responsible_agents()
-
-
-def init_performable_tasks():
-    for cell in Cell.Cell.instances:
-        cell.init_performable_tasks()
 

@@ -4,6 +4,7 @@ import simpy
 from copy import copy
 import numpy as np
 import Machine
+import matplotlib.pyplot as plt
 
 
 class Order:
@@ -119,6 +120,7 @@ class Order:
             self.next_task = self.remaining_tasks[0]
 
     def order_arrival(self):
+        #print(self.env.now, "Arrival of new Item", self.starting_position.items_in_storage, self.starting_position.STORAGE_CAPACITY, len([o for o in self.starting_position.items_in_storage if o.locked_by]))
         if len(self.starting_position.items_in_storage) < self.starting_position.STORAGE_CAPACITY:
             self.position = self.starting_position
             self.started = True
@@ -131,10 +133,8 @@ class Order:
             self.save_event("order_arrival")
             self.position.save_event("order_arrival")
         else:
-            if self.env.now == self.start:
-                self.save_event("incoming_order")
-            yield self.env.timeout(0.01)
-            self.env.process(self.order_arrival())
+            self.starting_position.items_waiting.append((self, self.env.now))
+            self.save_event("incoming_order")
 
     def set_order_overdue(self):
         """Event if order wasn´t finished in time set order over due"""
@@ -189,11 +189,23 @@ class OrderType:
 
     def __init__(self, type_config: dict):
         self.__class__.instances.append(self)
+        self.instance = len(self.__class__.instances)
         self.name = type_config['title']
+        self.frequency_factor = type_config['frequency_factor']
+        self.duration_factor = type_config['duration_factor']
         self.composition = type_config['composition']
         self.work_schedule = type_config['work_schedule']
         for processing_step in ProcessingStep.instances:
             self.work_schedule = [processing_step if x == processing_step.id else x for x in self.work_schedule]
+
+    def __eq__(self, other):
+        if other:
+            return self.instance == other.instance
+        else:
+            return False
+
+    def __lt__(self, other):
+        return self.instance < other.instance
 
 
 def load_order_types():
@@ -218,29 +230,49 @@ def order_arrivals(env: simpy.Environment, sim_env, config: dict):
     orders_created = 0
     last_arrival = 0
     max_orders = config['NUMBER_OF_ORDERS']
-    seed = config['SEED_INCOMING_ORDERS']
-    list_of_orders, types = get_orders_from_seed(max_orders, seed, config)
-    sorted_list = list_of_orders[np.argsort(list_of_orders[:])]
+    seed = config["SEED_INCOMING_ORDERS"]
+
+    list_of_orders = get_orders_from_seed(max_orders, seed, config)
+    sorted_list = list_of_orders[np.argsort(list_of_orders[:], order=["start", "urgency", "due_to"])]
+
     for order in sorted_list:
         yield env.timeout(order['start'] - last_arrival)
         new_order = Order(env, sim_env, env.now, order['due_to'], order['urgency'],
-                          types[order['type']], complexity=order['complexity'])
-        env.process(new_order.order_arrival())
+                          order['type'], complexity=order['complexity'])
+        new_order.order_arrival()
         last_arrival = env.now
         orders_created += 1
 
 
 def get_orders_from_seed(amount: int, seed: int, config: dict):
-    """Create a list of order attributes from seed randomly"""
-    possible_types = OrderType.instances
-    number_possible_types = len(possible_types)
+    """Create a list of random order attributes from seed"""
     np.random.seed(seed)
+
+    possible_types = OrderType.instances
+    frequency_factors = [order_type.frequency_factor for order_type in possible_types]
+    factors_sum = sum(frequency_factors)
+    frequency_factors = [factor/factors_sum for factor in frequency_factors]
+
     start_times = np.random.uniform(low=0, high=config['SIMULATION_RANGE'], size=amount)
+
     urgencies = np.random.randint(low=1, high=4, size=amount)
-    types = np.random.randint(low=0, high=number_possible_types, size=amount)
-    lengths = np.random.randint(low=config['ORDER_MINIMAL_LENGTH'], high=config['ORDER_MAXIMAL_LENGTH'], size=amount)
+    types = np.random.choice(possible_types, amount, p=frequency_factors,  replace=True)
+    duration_factors = np.asarray([order_type.duration_factor for order_type in types])
+    base_lengths = np.random.randint(low=config['ORDER_MINIMAL_LENGTH'], high=config['ORDER_MAXIMAL_LENGTH'], size=amount)
+
     complexities = np.random.normal(loc=1, scale=config['SPREAD_ORDER_COMPLEXITY'], size=amount)
-    due_tues = start_times + lengths
+
+    # Check if random complexities are greater than 0
+    for complexity in complexities:
+        comp_value = complexity
+        while comp_value <= 0:
+            comp_value = np.random.normal(loc=1, scale=config['SPREAD_ORDER_COMPLEXITY'], size=1)
+        complexities[complexities == complexity] = comp_value
+
+    # Calculate order due_tue dates
+    due_tues = start_times + base_lengths * duration_factors
+
     order_records = np.rec.fromarrays((start_times, due_tues, urgencies, complexities, types),
                                         names=('start', 'due_to', 'urgency', 'complexity', 'type'))
-    return order_records, possible_types
+
+    return order_records

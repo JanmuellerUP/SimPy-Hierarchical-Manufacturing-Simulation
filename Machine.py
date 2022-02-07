@@ -29,6 +29,7 @@ class Machine:
         self.waiting_agents = []
         self.wait_for_item_proc = None
         self.wait_for_output_proc = None
+        self.setup_proc = None
         self.wait_for_setup_and_load = False
 
         self.expected_orders = []  # (order, time, agent)
@@ -40,6 +41,7 @@ class Machine:
         self.item_in_output = None
         self.item_in_machine = None
         self.item_in_input = None
+        self.input_lock = False
 
         self.idle = True
         self.load_item = False
@@ -120,10 +122,8 @@ class Machine:
 
                 self.wait_for_setup_and_load = True
                 laden = self.env.process(self.get_item())
-                setup = self.env.process(self.setup_process(self.next_expected_order))
-                #print(self, "warte auf", self.next_expected_order, self.env.now)
-                yield laden & setup
-                #print(self, "item in machine nach laden", self.item_in_machine, self.env.now)
+                self.setup_proc = self.env.process(self.setup_process(self.next_expected_order))
+                yield laden & self.setup_proc
                 self.next_expected_order = None
                 self.wait_for_setup_and_load = False
                 yield self.env.process(self.starter())
@@ -141,9 +141,6 @@ class Machine:
                 #print("Unterbreche Laden")
                 laden.interrupt("The expected order arrival was cancel")
                 #print(laden.is_alive, self.wait_for_item_proc)
-            if setup.is_alive:
-                #print("Lasse setup weiter laufen")
-                yield setup
             self.next_expected_order = None
             self.wait_for_setup_and_load = False
             self.main_proc = self.env.process(self.main_process())
@@ -223,6 +220,8 @@ class Machine:
             self.setup_start_time = None
             self.current_setup = new_task
             self.save_event("setup_end")
+            #print("Finished Setup:", self, self.current_setup, self.env.now, next_item, next_item.type)
+            #print("Machine Status:", self.item_in_input, self.item_in_machine, self.expected_orders)
             #print("End setup", self, self.env.now, "Current:", new_task)
 
     def calculate_setup_time(self, item=None):
@@ -300,7 +299,7 @@ class Machine:
             print("Machine Error: There is not an useful item in the machine!")
             return
         elif self.item_in_machine.type is not self.current_setup:
-            print("Machine Error: Machine is in wrong setup!", self, self.setup, self.setup_start_time, self.env.now)
+            print("Machine Error: Machine is in wrong setup!", self, self.current_setup, self.env.now, self.item_in_machine)
             #print(self.item_in_machine, self.item_in_machine.type, self.setup, self.current_setup, self.item_in_input, new)
             return
 
@@ -372,7 +371,13 @@ class Machine:
 
     def cancel_expected_order(self, order):
         if order == self.next_expected_order:
+
             if self.main_proc and self.wait_for_setup_and_load:
+                if self.setup_proc:
+                    if self.setup_proc.is_alive:
+                        print("Setup is currently performed")
+                        yield self.setup_proc
                 self.main_proc.interrupt("Expected Order canceled")
+
 
 
