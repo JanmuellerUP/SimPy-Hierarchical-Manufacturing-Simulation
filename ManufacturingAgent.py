@@ -12,6 +12,7 @@ from Utils.devisions import div_possible_zero
 from Utils.dict_pos_types import dict_pos_types
 import numpy as np
 import RewardLayer
+from copy import copy
 
 import time
 import time_tracker
@@ -191,23 +192,24 @@ class ManufacturingAgent:
         else:
             criteria = [criteria["measure"] for criteria in self.RULESET.numerical_criteria]
 
-            ranking = useable_with_free_destination[["order"] + criteria]
+            ranking = useable_with_free_destination.loc[:, ["order"] + criteria]
 
             for criterion in self.RULESET.numerical_criteria:
                 weight = criterion["weight"]
                 measure = criterion["measure"]
                 order = criterion["ranking_order"]
 
+                max_v = ranking[measure].max()
+                min_v = ranking[measure].min()
+
                 # Min Max Normalisation
                 if order == "ASC":
-                    ranking["WS-" + measure] = weight * div_possible_zero((ranking[measure] - ranking[measure].min()), (ranking[measure].max() - ranking[measure].min()))
+                    ranking["WS-" + measure] = weight * div_possible_zero((ranking[measure] - min_v), (max_v - min_v))
                 else:
-                    ranking["WS-" + measure] = weight * (1 - div_possible_zero(
-                        (ranking[measure] - ranking[measure].min()),
-                        (ranking[measure].max() - ranking[measure].min())))
+                    ranking["WS-" + measure] = weight * (1 - div_possible_zero((ranking[measure] - min_v),(max_v - min_v)))
 
             order_scores = ranking.filter(regex="WS-")
-            ranking["Score"] = order_scores.sum(axis=1)
+            ranking.loc[:, "Score"] = order_scores.sum(axis=1)
             ranking.sort_values(by=["Score"], inplace=True)
 
             next_order = ranking["order"].iat[0]
@@ -215,24 +217,29 @@ class ManufacturingAgent:
         destination = useable_with_free_destination[useable_with_free_destination["order"] == next_order].reset_index(drop=True).loc[0, "_destination"]
 
         if destination:
+            print("Action", next_order, next_order.position, destination)
+            print("state", next_order, "\n", order_state)
             return self.env.process(self.item_from_to(next_order, next_order.position, destination)), next_order
         else:
             return None, next_order
 
     def get_smart_action(self, order_state):
-        state_numeric = self.state_to_numeric(order_state)
+
+        state_numeric = self.state_to_numeric(copy(order_state))
 
         # Get action space
         action_space = range(0, len(state_numeric) + 1)
 
         # Flatten state
-        state_flat = list(order_state.to_numpy().flatten())
+        state_flat = list(state_numeric.to_numpy().flatten())
 
         # Get action
-        action = 10
-        #action = smart_agent.get_action(state_flat)
+        random.seed = 1000
+        action = random.choice(action_space)
+        #print(action)
+        #action = smart_agent.get_action(state_flat, action_space)
 
-        if action <= len(state_numeric):
+        if action < len(state_numeric):
             # Normal action
             next_order = order_state.at[action, "order"]
             destination = order_state.at[action, "_destination"]
@@ -246,10 +253,11 @@ class ManufacturingAgent:
             #smart_agent.appendMemory(former_state=state_flat, new_state=state_flat, action=action, reward=penalty, time_passed=0)
             return None, None
         else:
+            print("Smart Action", next_order, next_order.position, destination)
             return self.env.process(self.item_from_to(next_order, next_order.position, destination)), next_order
 
     def state_to_numeric(self, order_state):
-        order_state["slot_id"] = order_state.index
+        order_state.loc[:, "slot_id"] = order_state.index
         slot_ids = order_state.pop("slot_id")
         order_state.insert(0, "slot_id", slot_ids)
 
@@ -274,7 +282,7 @@ class ManufacturingAgent:
         order_state[cols] = order_state[cols].replace(orders_in_cell)
 
         order_state = order_state.fillna(0)
-        order_state[order_state["order"] != 0] = 1
+        order_state.loc[order_state["order"] != 0, "order"] = 1
 
         return order_state
 
@@ -326,9 +334,11 @@ class ManufacturingAgent:
             for cell in self.CELL.CHILDS:
                 possibilities.append((cell, cell.check_best_path(order, include_all=False), cell.PERFORMABLE_TASKS))
             best_possibilities = sorted([(cell, shortest_path, cell.INPUT_BUFFER.free_slots()) for (cell, shortest_path, performable_tasks) in possibilities if shortest_path], key=lambda tup: tup[1])
+            free_best_destinations = [cell.INPUT_BUFFER for (cell, shortest_path, free_slots) in best_possibilities if
+                                      free_slots]
 
-            if best_possibilities:
-                destination = [cell.INPUT_BUFFER for (cell, shortest_path, free_slots) in best_possibilities if free_slots][0]
+            if free_best_destinations:
+                destination = free_best_destinations[0]
 
             else:
                 # Prefer the one that can perform the most continuous tasks and has a free Input Slot.
@@ -387,18 +397,6 @@ class ManufacturingAgent:
             else:
                 return
             self.position = None
-
-        else:
-            if destination is self.moving_start_position:
-                #Turn around
-                next_pos = self.next_position
-                self.next_position = self.moving_start_position
-                self.moving_start_position = next_pos
-                self.moving_start_time = self.env.now - self.remaining_moving_time
-
-                self.remaining_moving_time = self.moving_time - self.remaining_moving_time
-                self.moving_end_time = self.env.now + self.remaining_moving_time
-            self.moving = True
 
         if announce:
             #print(self, "Announce!")
@@ -507,6 +505,7 @@ class ManufacturingAgent:
                 yield self.env.timeout(self.TIME_FOR_ITEM_STORE)
                 self.position.input_lock = False
 
+                print("Remove", item, self, self.position, self.position.expected_orders)
                 self.position.expected_orders.remove(
                     [(order, time, agent) for order, time, agent in self.position.expected_orders if
                      order == item][0])
@@ -598,7 +597,7 @@ class ManufacturingAgent:
 
     def item_from_to(self, item, from_pos, to_pos):
         """TASK: Get an item from position and put it down on another position within the same cell"""
-        #print(self.env.now, "Item from to", from_pos, to_pos, self)
+        print(self.env.now, "Item from to", item, from_pos, to_pos, self)
         if self.position != from_pos:
             self.current_subtask = self.env.process(self.moving_proc(from_pos))
             yield self.current_subtask

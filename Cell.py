@@ -129,9 +129,9 @@ class Cell:
 
         current_time = self.env.now
         attribute_columns = ["agent_position", "moving", "remaining_moving_time", "next_position", "has_task",
-                             "locked_item", "current_setup", "in_setup", "next_setup", "remaining_setup_time",
-                             "manufacturing", "failure", "remaining_man_time", "failure_fixed_in", "Interface ingoing",
-                             "Interface outgoing"]
+                             "locked_item", "machine_type", "current_setup", "in_setup", "next_setup",
+                             "remaining_setup_time", "manufacturing", "failure", "remaining_man_time",
+                             "failure_fixed_in", "Interface ingoing", "Interface outgoing"]
 
         occupancy["pos_attributes"] = occupancy["pos"].apply(get_pos_attributes,
                                                                      args=(current_time, self))
@@ -315,7 +315,6 @@ def get_order_attributes(order, requester, now):
         else:
             result["distance"] = -1
 
-
         if isinstance(order.position, Machine.Machine):
             if order == order.position.item_in_input:
                 result["in_m_input"] = 1
@@ -367,6 +366,8 @@ def get_pos_attributes(pos, now, cell: Cell):
 
     elif isinstance(pos, Machine.Machine):
         # Attributes of machine
+
+        result["machine_type"] = pos.PERFORMABLE_TASK.id
 
         if pos.current_setup:
             result["current_setup"] = pos.current_setup.type_id
