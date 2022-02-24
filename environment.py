@@ -101,6 +101,7 @@ def simulation(config: dict, eval_measures: dict, runs=1, show_progress=False, s
         print('\nSimulation %d finished in %d seconds!' % (sim_count + 1, time.time() - start_time))
 
         print("Time Tracker:\nTime for state calculations:", time_tracker.time_state_calc, "\nTime for destination calculations:", time_tracker.time_destination_calc)
+        print("\nState Calculations:\nTime for occupancy:", time_tracker.time_occupancy_calc, "\nTime for order attributes:", time_tracker.time_order_attr_calc, "\nTime for pos attributes:", time_tracker.time_pos_attr_calc)
 
         database.add_final_events()
 

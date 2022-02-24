@@ -24,8 +24,9 @@ class Buffer:
         self.expected_orders_to_left = []  # (order, time, agent)
 
         self.__class__.instances.append(self)
-        self.logs = []
-        self._excluded_keys = ["logs", "env", "RESPONSIBLE_AGENTS", "_excluded_keys"]
+        self.result = None
+        self._excluded_keys = ["logs", "env", "RESPONSIBLE_AGENTS", "_excluded_keys", "_continuous_attributes"]
+        self._continuous_attributes = []
 
         self.env.process(self.initial_event())
 
@@ -66,6 +67,12 @@ class Buffer:
                 self.waiting_agents[0].current_waitingtask.interrupt("New space free")
         self.save_event("item_picked_up", item)
 
+    def occupancy(self, pos_type: str):
+        return [{"order": item, "pos": self, "pos_type": pos_type} for item in self.items_in_storage] \
+               + [{"order": None, "pos": self, "pos_type": pos_type}] * (self.STORAGE_CAPACITY - len(self.items_in_storage))
+
+    def get_pos_attributes(self, now):
+        return 0
 
 
 class QueueBuffer(Buffer):

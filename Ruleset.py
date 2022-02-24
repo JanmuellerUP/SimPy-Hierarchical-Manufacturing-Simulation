@@ -27,10 +27,10 @@ class RuleSet:
 
         try:
             self.dynamic = rules['rules']['dynamic']
-            self.model = pickle.loads(rules['rules']['trained_model'])
+            #self.model = pickle.loads(rules['rules']['trained_model'])
         except:
             self.dynamic = False
-            self.model = None
+            #self.model = None
 
 
 def load_rulesets():

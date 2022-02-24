@@ -7,6 +7,9 @@ import simpy
 from Utils.log import get_log
 import pandas as pd
 
+import time_tracker
+import time
+
 
 class Cell:
     instances = []
@@ -89,13 +92,19 @@ class Cell:
 
 
         # Get occupancy of all available slots within this cell
+        now = time.time()
         occupancy_states = pd.DataFrame(self.occupancy(requester), columns=["order", "pos", "pos_type"])
+        time_tracker.time_occupancy_calc += time.time() - now
 
         # Add attributes for each order within this cell
+        now = time.time()
         occupancy_states = self.add_order_attributes(occupancy_states, requester)
+        time_tracker.time_order_attr_calc += time.time() - now
 
         # Add attributes for each of the positions (machine, agent, buffer)
+        now = time.time()
         occupancy_states = self.add_position_attributes(occupancy_states)
+        time_tracker.time_pos_attr_calc += time.time() - now
 
         return occupancy_states
 
@@ -104,12 +113,12 @@ class Cell:
         current_time = self.env.now
         attribute_columns = ["start", "due_to", "complexity", "type", "in_cell_since", "locked",
                              "picked_up", "processing", "tasks_finished", "remaining_tasks", "next_task",
-                             "position", "distance", "in_m_input", "in_m", "in_same_cell"]
+                             "distance", "in_m_input", "in_m", "in_same_cell"]
 
         occupancy["attributes"] = occupancy["order"].apply(get_order_attributes,
                                                                      args=(requester, current_time))
-        occupancy = pd.concat([occupancy, occupancy["attributes"].apply(pd.Series)], axis=1)
-        occupancy.drop(columns="attributes", inplace=True)
+
+        occupancy = pd.concat([occupancy.drop("attributes", axis=1), pd.json_normalize(occupancy["attributes"])], axis=1)
 
         if not len(occupancy.index):
             occupancy = pd.concat([occupancy, pd.DataFrame(columns=attribute_columns)])
@@ -127,8 +136,7 @@ class Cell:
         occupancy["pos_attributes"] = occupancy["pos"].apply(get_pos_attributes,
                                                                      args=(current_time, self))
 
-        occupancy = pd.concat([occupancy, occupancy["pos_attributes"].apply(pd.Series)], axis=1)
-        occupancy.drop(columns="pos_attributes", inplace=True)
+        occupancy = pd.concat([occupancy.drop("pos_attributes", axis=1), pd.json_normalize(occupancy["pos_attributes"])], axis=1)
 
         if not len(occupancy.index):
             occupancy = pd.concat([occupancy, pd.DataFrame(columns=attribute_columns)])
@@ -293,7 +301,6 @@ def get_order_attributes(order, requester, now):
         else:
             result["picked_up"] = 2
 
-
         result["processing"] = int(order.processing)
         result["tasks_finished"] = int(order.tasks_finished)
         result["remaining_tasks"] = len(order.remaining_tasks)
@@ -304,10 +311,8 @@ def get_order_attributes(order, requester, now):
             result["next_task"] = -1
 
         if order.position:
-            result["position"] = order.current_cell.POSSIBLE_POSITIONS.index(order.position)
             result["distance"] = requester.time_for_distance(order.position)
         else:
-            result["position"] = -1
             result["distance"] = -1
 
 
@@ -333,7 +338,7 @@ def get_order_attributes(order, requester, now):
     else:
         result = {"start": 0, "due_to": 0, "complexity": 0, "type": 0, "in_cell_since": 0, "locked": 0,
                              "picked_up": 0, "processing": 0, "tasks_finished": 0, "remaining_tasks": 0, "next_task": 0,
-                             "position": 0, "distance": 0, "in_m_input": 0, "in_m": 0, "in_same_cell": 0}
+                             "distance": 0, "in_m_input": 0, "in_m": 0, "in_same_cell": 0}
 
     return result
 
@@ -354,7 +359,11 @@ def get_pos_attributes(pos, now, cell: Cell):
             result["next_position"] = -1
 
         result["has_task"] = int(pos.has_task)
-        result["locked_item"] = pos.locked_item
+
+        if pos.locked_item:
+            result["locked_item"] = pos.locked_item
+        else:
+            result["locked_item"] = -1
 
     elif isinstance(pos, Machine.Machine):
         # Attributes of machine

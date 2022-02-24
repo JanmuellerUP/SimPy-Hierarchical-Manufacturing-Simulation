@@ -9,7 +9,9 @@ import threading
 from Utils.log import write_log
 from Utils.consecutive_performable_tasks import consecutive_performable_tasks
 from Utils.devisions import div_possible_zero
+from Utils.dict_pos_types import dict_pos_types
 import numpy as np
+import RewardLayer
 
 import time
 import time_tracker
@@ -159,7 +161,6 @@ class ManufacturingAgent:
             self.save_event("end_of_main_process")
             self.main_proc = self.env.process(self.main_process())
 
-
         if self.lock.locked():
             self.lock.release()
 
@@ -215,11 +216,59 @@ class ManufacturingAgent:
             return None, next_order
 
     def get_smart_action(self, order_state):
-        # Remove order column
-        # Action space are potential slots + None for waiting
-        # Get position for task
+        state_numeric = self.state_to_numeric(order_state)
+
+        # Get action space
+        action_space = range(0, len(state_numeric) + 1)
+
+        # Flatten state
+        state_flat = list(order_state.to_numpy().flatten())
+
+        # Get action
+        action = 10
+
+        if action <= len(state_numeric):
+            # Normal action
+            order = order_state.at[action, "order"]
+            destination = order_state.at[action, "_destination"]
+        else:
+            # Take no action
+            return None, None
+
+        penalty = RewardLayer.evaluate_choice(state_numeric.loc[action])
+
         # Rewards after task was completed
-        return 0
+        return self.get_action(order_state)
+
+    def state_to_numeric(self, order_state):
+        order_state["slot_id"] = order_state.index
+        slot_ids = order_state.pop("slot_id")
+        order_state.insert(0, "slot_id", slot_ids)
+
+        pos_in_cell = order_state["pos"].unique()
+        pos_ids = np.arange(1, len(pos_in_cell)+1)
+        pos_ids = dict(zip(pos_in_cell, pos_ids))
+
+        pos_type_ids = dict_pos_types
+
+        orders_in_cell = order_state[order_state["order"].notnull()]["order"].to_dict()
+        orders_in_cell = {orders_in_cell[key]: key for key in orders_in_cell}
+
+        # Map categorical values to ids
+        cols = ["pos", "agent_position", "next_position", "_destination"]
+        order_state[cols] = order_state[cols].replace(pos_ids)
+
+        cols = ["pos_type"]
+        order_state[cols] = order_state[cols].replace(pos_type_ids)
+
+        order_state["locked_item"].fillna(-2)
+        cols = ["locked_item"]
+        order_state[cols] = order_state[cols].replace(orders_in_cell)
+
+        order_state = order_state.fillna(0)
+        order_state[order_state["order"] != 0] = 1
+
+        return order_state
 
     def calculate_destination(self, order):
         """Calculate the best next position for an agent to bring the order"""
@@ -251,11 +300,12 @@ class ManufacturingAgent:
             else:
 
                 free_machines = [machine for (machine, item_input, item_machine, expected_orders, setup) in potential_machines if item_input is None and expected_orders == 0]
+
                 if len(free_machines) > 0:
                     destination = free_machines[0]
 
             if destination is None:
-                if self.CELL.STORAGE.free_slots():
+                if self.CELL.STORAGE.free_slots() and order.position is not self.CELL.STORAGE:
                     destination = self.CELL.STORAGE
 
         else:
@@ -263,13 +313,14 @@ class ManufacturingAgent:
 
             possibilities = []
 
+            # Check all Child cells and sort by least amount of
+            # manufacturing cells needed to completely process this order
             for cell in self.CELL.CHILDS:
                 possibilities.append((cell, cell.check_best_path(order, include_all=False), cell.PERFORMABLE_TASKS))
             best_possibilities = sorted([(cell, shortest_path, cell.INPUT_BUFFER.free_slots()) for (cell, shortest_path, performable_tasks) in possibilities if shortest_path], key=lambda tup: tup[1])
 
             if best_possibilities:
                 destination = [cell.INPUT_BUFFER for (cell, shortest_path, free_slots) in best_possibilities if free_slots][0]
-                free_slot = True
 
             else:
                 # Prefer the one that can perform the most continuous tasks and has a free Input Slot.
@@ -277,12 +328,15 @@ class ManufacturingAgent:
                 result = sorted([(cell, amount) for (cell, amount) in result if amount > 0], key=lambda tup: tup[1], reverse=True)
 
                 if result:
-                    best_cell, amount = result[0]
                     for cell, amount in result:
                         if not cell.INPUT_BUFFER.full:
                             best_cell = cell
+                            destination = best_cell.INPUT_BUFFER
                             break
-                    destination = best_cell.INPUT_BUFFER
+
+            if not destination:
+                if self.CELL.STORAGE.free_slots() and order.position is not self.CELL.STORAGE:
+                    destination = self.CELL.STORAGE
 
         return destination
 
@@ -292,7 +346,9 @@ class ManufacturingAgent:
                     data["in_m"] == 0)
 
         if useable_order:
-            return self.calculate_destination(data["order"])
+            destination = self.calculate_destination(data["order"])
+            if destination:
+                return destination
 
         return -1
 
@@ -387,7 +443,7 @@ class ManufacturingAgent:
 
     def pick_up(self, item):
         """SUBTASK: Pick up item from position if inventory is empty"""
-        #print(self, self.position == item.position)
+        #print(self,"Pick up", item, self.position == item.position, item.locked_by == self, self.locked_item == item, self.picked_up_item == None)
         if self.picked_up_item is None:
             if isinstance(self.position, Machine):
                 if self.position.item_in_output != item:
@@ -430,7 +486,6 @@ class ManufacturingAgent:
             if self.position.item_in_input or self.position.input_lock: # Position besetzt
                 self.current_waitingtask = self.env.process(self.wait_for_free_slot())
                 yield self.current_waitingtask
-                #print(self, "MARKER1", self.picked_up_item)
                 self.current_subtask = self.env.process(self.store_item())
                 yield self.current_subtask
                 return
@@ -535,7 +590,7 @@ class ManufacturingAgent:
 
     def item_from_to(self, item, from_pos, to_pos):
         """TASK: Get an item from position and put it down on another position within the same cell"""
-
+        #print(self.env.now, "Item from to", from_pos, to_pos, self)
         if self.position != from_pos:
             self.current_subtask = self.env.process(self.moving_proc(from_pos))
             yield self.current_subtask
