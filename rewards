@@ -1,0 +1,14 @@
+Belohnung:
+    Input frei
+    Zeit von Auftrag in Zelle
+    Bearbeitete Schritte in Zelle
+    Schritte fertiggestellt
+
+    Belohnungen an Agenten höherer Zellen wenn Auftrag in der Zelle bearbeitet worden ist. Je mehr Produktionsschritte umso mehr
+
+
+Bestrafung:
+    Maschine besetzt
+    Storage voll
+    Auftrag an falsche Maschine gebracht
+    Maschine ist in falschem setup

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 from ProcessingStep import load_processing_steps, ProcessingStep
 import simpy
@@ -5,6 +6,7 @@ from copy import copy
 import numpy as np
 import Machine
 import matplotlib.pyplot as plt
+from Utils.consecutive_performable_tasks import consecutive_performable_tasks
 
 
 class Order:
@@ -42,12 +44,12 @@ class Order:
         self.picked_up_by = None  # The agent which picked up the item
         self.blocked_by = None  # Other order that might block the further processing of this order
         self.locked_by = None  # Locked by Agent X. A locked Order can´t be part of other agent tasks
-        self.next_locked_by = None  # Announced lock after the current lock was released
-        self.waiting_agent_pos = []
+        self.waiting_agent_pos = []  # Agent waiting for this order to be processed. Tuple: (agent, position)
 
         self.__class__.instances.append(self)
-        self.logs = []
-        self._excluded_keys = ["logs", "_excluded_keys", "env", "SIMULATION_ENVIRONMENT", "work_schedule", "starting_positon", "waiting_agent_pos"]
+        self.result = None
+        self._excluded_keys = ["logs", "_excluded_keys", "env", "SIMULATION_ENVIRONMENT", "work_schedule", "starting_positon", "waiting_agent_pos", "_continuous_attributes"]
+        self._continuous_attributes = []
 
         self.env.process(self.set_order_overdue())
 
@@ -113,7 +115,7 @@ class Order:
     def processing_step_finished(self):
         if len(self.remaining_tasks) == 1:
             del self.remaining_tasks[0]
-            self.next_task = None
+            self.next_task = ProcessingStep.dummy_processing_step
             self.tasks_finished = True
         else:
             del self.remaining_tasks[0]
@@ -129,7 +131,7 @@ class Order:
                 self.position.full = True
             print(self.env.now, "Arrival of new Item")
             self.SIMULATION_ENVIRONMENT.main_cell.new_order_in_cell(self)
-            self.SIMULATION_ENVIRONMENT.main_cell.recalculate_agents()
+            self.SIMULATION_ENVIRONMENT.main_cell.inform_agents()
             self.save_event("order_arrival")
             self.position.save_event("order_arrival")
         else:
@@ -152,7 +154,7 @@ class Order:
 
     def get_additional_ranking_criteria(self, requesting_agent):
 
-        distance, over = requesting_agent.time_for_distance(
+        distance = requesting_agent.time_for_distance(
             self.position)  # How long does it take the agent to get to my position?
 
         if not distance:
@@ -181,7 +183,21 @@ class Order:
         if est_accessable_in < 0:
             est_accessable_in = 0
 
-        return {"distance": distance, "est_accessable_in":est_accessable_in}
+        remaining_tasks = len(self.remaining_tasks)
+
+        tasks_in_cell_performable = consecutive_performable_tasks(self.remaining_tasks, self.current_cell.PERFORMABLE_TASKS)
+
+        if self.processing:
+            remaining_tasks -= 0.5
+            tasks_in_cell_performable -= 1
+
+        order_length = self.due_to - self.start
+
+        relative_order_duration = (self.env.now - self.start) / order_length
+
+        return {"distance": distance, "est_accessable_in": est_accessable_in, "remaining_tasks": remaining_tasks,
+                "tasks_in_cell_performable": tasks_in_cell_performable, "order_length": order_length,
+                "relative_order_duration": relative_order_duration}
 
 
 class OrderType:
@@ -190,7 +206,8 @@ class OrderType:
     def __init__(self, type_config: dict):
         self.__class__.instances.append(self)
         self.instance = len(self.__class__.instances)
-        self.name = type_config['title']
+        self.name = type_config['title'].encode()
+        self.type_id = type_config['id']
         self.frequency_factor = type_config['frequency_factor']
         self.duration_factor = type_config['duration_factor']
         self.composition = type_config['composition']
@@ -213,7 +230,7 @@ def load_order_types():
     Create instances for order types from json
     """
     load_processing_steps()
-    order_types = json.load(open("Order_types.json"))
+    order_types = json.load(open("Order_types.json", encoding="UTF-8"))
     for type in order_types['order_types']:
         OrderType(type)
 

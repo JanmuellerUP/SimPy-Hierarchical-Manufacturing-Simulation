@@ -3,6 +3,7 @@ import os
 import time
 import shutil
 import pandas as pd
+import Cell, Order
 
 
 def set_up_db(sim_env):
@@ -115,3 +116,16 @@ def clear_files():
 
 def close_connection(sim_env):
     sim_env.db_con.close()
+
+
+def add_final_events():
+    for buffer in Cell.InterfaceBuffer.instances:
+        buffer.end_event()
+    for buffer in Cell.QueueBuffer.instances:
+        buffer.end_event()
+    for order in Order.Order.instances:
+        order.end_event()
+    for agent in Cell.ManufacturingAgent.instances:
+        agent.end_event()
+    for machine in Cell.Machine.Machine.instances:
+        machine.end_event()

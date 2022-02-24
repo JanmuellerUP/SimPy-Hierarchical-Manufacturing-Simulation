@@ -1,10 +1,14 @@
 import Cell
-from Order import load_order_types, order_arrivals
+from Order import load_order_types, order_arrivals, Order
 import time
 from Ruleset import load_rulesets
 from Utils import calculate_measures, database, check_config
 from Utils.init_simulation_env import *
+from Utils.save_results import SimulationResults
+from Utils.progress_func import show_progress_func
 import numpy as np
+import json
+import time_tracker
 
 
 class SimulationEnvironment:
@@ -27,34 +31,31 @@ class SimulationEnvironment:
         self.main_cell = main_cell
         self.cells = []
 
+        self.result = None
+
         self.db_con, self.db_cu = database.set_up_db(self)
         self.__class__.instances.append(self)
 
+
 def set_up_sim_env(config: dict, env: simpy.Environment, setup):
     # Generate objects from setup json file
-    main_components = generator_from_json(setup, config, env)
-    main_components = set_objects_in_main_cell(main_components)
-
-    # Set dependencies between each cell
-    set_parents_in_tree(main_components['main_cell'], None)
-    tree = get_tree_levels(main_components['main_cell'])
-    finish_setup(tree)
+    cells = generator_from_setup(setup, config, env)
 
     # Calculate the shortest distances between objects of each cell
-    calculate_distances_tree(config, tree)
+    # calculate_distances(config, cells)
 
-    return SimulationEnvironment(env, config, main_components['main_cell'])
+    # Create new simulation environment and set this to all cells
+    main_cell = cells[np.isnan(cells["Parent"])]["cell_obj"].item()
+
+    sim_env = SimulationEnvironment(env, config, main_cell)
+
+    set_env_in_cells(sim_env, cells["cell_obj"])
+
+    return sim_env
 
 
-def set_objects_in_main_cell(setup: dict):
-    setup['main_cell'].INPUT_BUFFER = setup['main_input']
-    setup['main_cell'].POSSIBLE_POSITIONS.append(setup['main_cell'].INPUT_BUFFER)
-    setup['main_cell'].OUTPUT_BUFFER = setup['main_output']
-    setup['main_cell'].POSSIBLE_POSITIONS.append(setup['main_cell'].OUTPUT_BUFFER)
-    return setup
-
-
-def simulation(config: dict, eval_measures: dict, runs=1, show_progress=False, save_log=True, change_interruptions=True, change_incoming_orders=True):
+def simulation(config: dict, eval_measures: dict, runs=1, show_progress=False, save_log=True,
+               change_interruptions=True, change_incoming_orders=True, train=False):
     """Main function of the simulation: Create project setup and run simulation on it"""
     check_config.check_configuration_file(config)
     load_order_types()
@@ -75,18 +76,17 @@ def simulation(config: dict, eval_measures: dict, runs=1, show_progress=False, s
 
     # Switch between new setup and loading an existing one
     if yes_no_question("Do you want to load an existing cell setup? [Y/N]\n"):
-        setup_json = load_setup_from_config(config)
+        configuration = load_setup_from_config(config)
     else:
-        setup_json = new_cell_setup(config)
+        configuration = new_cell_setup()
 
     # Run the set amount of simulations
     for sim_count in range(runs):
-        config["SEED_MACHINE_INTERUPTIONS"] = interruption_seeds[sim_count]
-        config["SEED_INCOMING_ORDERS"] = order_seeds[sim_count]
+        config["SEED_MACHINE_INTERUPTIONS"] = interruption_seeds[sim_count].item()
+        config["SEED_INCOMING_ORDERS"] = order_seeds[sim_count].item()
         env = simpy.Environment()
 
-        simulation_environment = set_up_sim_env(config, env, setup_json)
-        set_env_in_cells(simulation_environment)
+        simulation_environment = set_up_sim_env(config, env, configuration)
 
         print('----------------------------------------------------------------------------')
         start_time = time.time()
@@ -100,16 +100,26 @@ def simulation(config: dict, eval_measures: dict, runs=1, show_progress=False, s
 
         print('\nSimulation %d finished in %d seconds!' % (sim_count + 1, time.time() - start_time))
 
-        add_final_events()
+        print("Time Tracker:\nTime for state calculations:", time_tracker.time_state_calc, "\nTime for destination calculations:", time_tracker.time_destination_calc)
 
-        result = sim_run_evaluation(simulation_environment, eval_measures)
+        database.add_final_events()
+
+        sim_run_evaluation(simulation_environment, eval_measures)
 
         if save_log:
             database.save_as_excel(simulation_environment, sim_count + 1)
         database.close_connection(simulation_environment)
         release_objects()
 
-    return 0
+    schema = json.loads("""
+                            {"simulation_runs":[]}
+                            """)
+
+    for run in SimulationResults.instances:
+        schema["simulation_runs"].append(run.results)
+
+    with open('result/last_runs.json', 'w') as f:
+        json.dump(schema, f, indent=4, ensure_ascii=False)
 
 
 def sim_run_evaluation(sim_env, eval_measures):
@@ -135,15 +145,16 @@ def sim_run_evaluation(sim_env, eval_measures):
         measures = [key for key, value in eval_measures[focus].items() if value == True]
         if focus == "simulation":
             parameters = {'sim_env': sim_env, 'measures': measures}
-            results = functionList[focus](**parameters)
+            sim_env.result = functionList[focus](**parameters)
         else:
             objects = objectList[focus]
             for obj_to_check in objects:
                 parameters = {'sim_env': sim_env, 'obj': obj_to_check, 'measures': measures}
-                results = functionList[focus](**parameters)
+                obj_to_check.result = functionList[focus](**parameters)
+
+    result = SimulationResults(sim_env)
 
     print("\nCalculation finished in %d seconds!" % (time.time() - start_time))
-    return 0
 
 
 def release_objects():
@@ -154,3 +165,4 @@ def release_objects():
     Cell.Machine.Machine.instances.clear()
     Order.instances.clear()
     Order.finished_instances.clear()
+

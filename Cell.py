@@ -5,18 +5,20 @@ from ProcessingStep import ProcessingStep
 import itertools
 import simpy
 from Utils.log import get_log
+import pandas as pd
 
 
 class Cell:
     instances = []
 
-    def __init__(self, env: simpy.Environment, agents: list, storage: QueueBuffer, input_buffer: InterfaceBuffer=None, output_buffer: InterfaceBuffer=None, parent_cell=None):
+    def __init__(self, env: simpy.Environment, agents: list, storage: QueueBuffer, input_buffer: InterfaceBuffer = None,
+                 output_buffer: InterfaceBuffer = None, level=None):
         self.env = env
         self.SIMULATION_ENVIRONMENT = None
 
         # Attributes
-        self.PARENT = parent_cell  # Parent cell of this cell, None if cell is main cell
-        self.LEVEL = None  # Hierachie level of this cell, counting bottom up
+        self.PARENT = None  # Parent cell of this cell, None if cell is main cell
+        self.LEVEL = level  # Hierarchy level of this cell, counting bottom up
         self.HEIGHT = None  # Physical distance between top and bottom of the cell, used for distance calculations
         self.WIDTH = None  # Physical distance between left and right side of the cell, used for distance calculations
         self.DISTANCES = []  # Array containing all possible paths within the cell with shortest length. Agent always use the shortest path to its destination
@@ -27,7 +29,7 @@ class Cell:
         self.INPUT_BUFFER = input_buffer  # Input buffer of the cell, Interface with parent cell.
         self.OUTPUT_BUFFER = output_buffer  # Output buffer of the cell, Interface with parent cell.
         self.STORAGE = storage  # Storage buffer of the cell. Only one Storage per cell.
-        self.POSSIBLE_POSITIONS = [storage]  # All possible positions for agents within this cell
+        self.POSSIBLE_POSITIONS = [input_buffer, output_buffer, storage]  # All possible positions for agents within this cell
         self.PERFORMABLE_TASKS = []  # Amount of machines in this cell or its childs for each processing step. Used to determine if orders can be completly processed in this tree branch
 
         # State
@@ -35,8 +37,10 @@ class Cell:
         self.expected_orders = []  # Announced Orders, that will be available within this cell within next time (Order, Time, Position, Agent)
 
         self.__class__.instances.append(self)
-        self.logs = []
-        self._excluded_keys = ["logs", "HEIGHT", "WIDTH", "SIMULATION_ENVIRONMENT", "env", "DISTANCES", "POSSIBLE_POSITIONS", "PERFORMABLE_TASKS"] # Attributes excluded from log
+        self.result = None
+        self._excluded_keys = ["logs", "HEIGHT", "WIDTH", "SIMULATION_ENVIRONMENT", "env", "DISTANCES",
+                               "POSSIBLE_POSITIONS", "PERFORMABLE_TASKS"]  # Attributes excluded from log
+        self._continuous_attributes = []  # Attributes that have to be calculated for states between discrete events
 
     def inform_incoming_order(self, agent, item, time, position):
         self.expected_orders.append((item, time, position, agent))
@@ -69,47 +73,72 @@ class Cell:
                 return 0
         return 1
 
-    def calculate_states(self, requester=None):
+    def occupancy(self, requester: ManufacturingAgent):
+        buffer = [self.INPUT_BUFFER.occupancy("Input")] + [self.OUTPUT_BUFFER.occupancy("Output")]
+        storage = [self.STORAGE.occupancy("Storage")]
+        agents = [agent.occupancy(requester=requester) for agent in self.AGENTS]
+        machines = [machine.occupancy() for machine in self.MACHINES]
+        interfaces_in = [interface.occupancy("Interface-In") for interface in self.INTERFACES_IN]
+        interfaces_out = [interface.occupancy("Interface-Out") for interface in self.INTERFACES_OUT]
 
-        state = {
-            "orders_currently_in_cell": [(order, get_log(order, requester)) for order in self.orders_in_cell],
-            "expected_orders": [(order, get_log(order), timestamp, position) for order, timestamp, position, agent in self.expected_orders],
-            "partner_agents": [(agent, get_log(agent)) for agent in self.AGENTS if agent != requester],
-            "storage": (self.STORAGE, get_log(self.STORAGE)),
-            "input_buffer": (self.INPUT_BUFFER, get_log(self.INPUT_BUFFER)),
-            "output_buffer": (self.OUTPUT_BUFFER, get_log(self.OUTPUT_BUFFER))
-        }
+        result = buffer + storage + agents + machines + interfaces_in + interfaces_out
 
-        if isinstance(self, ManufacturingCell):
-            state["machines"] = [(machine, get_log(machine)) for machine in self.MACHINES]
-            state["interfaces_in"] = []
-            state["interfaces_out"] = []
-        else:
-            state["machines"] = []
-            state["interfaces_in"] = [(interface, get_log(interface)) for interface in self.INTERFACES_IN]
-            state["interfaces_out"] = [(interface, get_log(interface)) for interface in self.INTERFACES_OUT]
+        return [item for sublist in result for item in sublist]
 
-        return state
+    def get_cell_state(self, requester: ManufacturingAgent):
 
-    def get_position_of_next_expected_order(self):
-        """At which position is the next unblocked order expected?
-        Useful to move agent to this position to save moving time"""
-        min_time = float('inf')
-        if not self.expected_orders:
-            return None, None
-        for order, time, position, agent in self.expected_orders:
-            if order.next_locked_by and time > min_time:
-                continue
-            else:
-                min_time = time
-                next_position = position
-                item = order
-        return next_position, item
 
-    def recalculate_agents(self, failure=False):
+        # Get occupancy of all available slots within this cell
+        occupancy_states = pd.DataFrame(self.occupancy(requester), columns=["order", "pos", "pos_type"])
+
+        # Add attributes for each order within this cell
+        occupancy_states = self.add_order_attributes(occupancy_states, requester)
+
+        # Add attributes for each of the positions (machine, agent, buffer)
+        occupancy_states = self.add_position_attributes(occupancy_states)
+
+        return occupancy_states
+
+    def add_order_attributes(self, occupancy, requester: ManufacturingAgent):
+
+        current_time = self.env.now
+        attribute_columns = ["start", "due_to", "complexity", "type", "in_cell_since", "locked",
+                             "picked_up", "processing", "tasks_finished", "remaining_tasks", "next_task",
+                             "position", "distance", "in_m_input", "in_m", "in_same_cell"]
+
+        occupancy["attributes"] = occupancy["order"].apply(get_order_attributes,
+                                                                     args=(requester, current_time))
+        occupancy = pd.concat([occupancy, occupancy["attributes"].apply(pd.Series)], axis=1)
+        occupancy.drop(columns="attributes", inplace=True)
+
+        if not len(occupancy.index):
+            occupancy = pd.concat([occupancy, pd.DataFrame(columns=attribute_columns)])
+
+        return occupancy
+
+    def add_position_attributes(self, occupancy):
+
+        current_time = self.env.now
+        attribute_columns = ["agent_position", "moving", "remaining_moving_time", "next_position", "has_task",
+                             "locked_item", "current_setup", "in_setup", "next_setup", "remaining_setup_time",
+                             "manufacturing", "failure", "remaining_man_time", "failure_fixed_in", "Interface ingoing",
+                             "Interface outgoing"]
+
+        occupancy["pos_attributes"] = occupancy["pos"].apply(get_pos_attributes,
+                                                                     args=(current_time, self))
+
+        occupancy = pd.concat([occupancy, occupancy["pos_attributes"].apply(pd.Series)], axis=1)
+        occupancy.drop(columns="pos_attributes", inplace=True)
+
+        if not len(occupancy.index):
+            occupancy = pd.concat([occupancy, pd.DataFrame(columns=attribute_columns)])
+
+        return occupancy
+
+    def inform_agents(self):
         """Inform all agents that the cell states have changed. Idling agent will check for new tasks"""
         for agent in self.AGENTS:
-            agent.state_change_in_cell(failure)
+            agent.state_change_in_cell()
 
     def new_order_in_cell(self, order):
         order.current_cell = self
@@ -121,7 +150,6 @@ class Cell:
         order.in_cell_since = None
         self.orders_in_cell.remove(order)
 
-
 class ManufacturingCell(Cell):
 
     def __init__(self, machines: list, *args):
@@ -131,6 +159,9 @@ class ManufacturingCell(Cell):
         self.INTERFACES_OUT = []
         self.POSSIBLE_POSITIONS += machines
 
+        self.DISTANCES = [(start, end, 5) for start in self.POSSIBLE_POSITIONS for end in self.POSSIBLE_POSITIONS if
+                          start is not end]
+
     def init_responsible_agents(self):
         """Set responsible agents of object within the cell to the cell agents"""
         self.INPUT_BUFFER.RESPONSIBLE_AGENTS = self.AGENTS
@@ -138,9 +169,6 @@ class ManufacturingCell(Cell):
         self.STORAGE.RESPONSIBLE_AGENTS = self.AGENTS
         for machine in self.MACHINES:
             machine.RESPONSIBLE_AGENTS = self.AGENTS
-        for agent in self.AGENTS:
-            agent.position = self.INPUT_BUFFER
-            self.INPUT_BUFFER.agents_at_position.append(agent)
 
     def init_performable_tasks(self):
         """Initialize self.PERFORMABLE_TASKS:
@@ -154,74 +182,6 @@ class ManufacturingCell(Cell):
                     machine_counter += 1
             result.append((task, machine_counter))
         self.PERFORMABLE_TASKS = result
-
-    def calculate_distances(self, input_pos, output_pos, storage_pos, junctions, machines):
-        """Calculate distances within this cell and initialize self.DISTANCES for length of paths"""
-        junctions = junctions
-
-        def shortest_route_one_junction(start, end):
-            start_x, start_y = start
-            end_x, end_y = end
-            junctions_with_dist = []
-            for junction in junctions:
-                x, y = junction
-                distance_from_start = abs(start_x-x) + abs(start_y-y)
-                distance_to_end = abs(end_x - x) + abs(end_y - y)
-                junctions_with_dist.append((junction, distance_from_start + distance_to_end))
-            dist_min = float('inf')
-            for (junction, dist) in junctions_with_dist:
-                if dist < dist_min:
-                    dist_min = dist
-            return dist_min
-
-        def shortest_route_two_junctions(start, end):
-            start_x, start_y = start
-            end_x, end_y = end
-            junctions_with_dist = []
-            for junction in junctions:
-                x, y = junction
-                distance_from_start = abs(start_x-x) + abs(start_y-y)
-                distance_to_end = abs(end_x-x) + abs(end_y-y)
-                junctions_with_dist.append((junction, distance_from_start, distance_to_end))
-            dist_start_min = float('inf')
-            junction_start_min = None
-            dist_end_min = float('inf')
-            junction_end_min = None
-            for (junction, dist_start, dist_end) in junctions_with_dist:
-                if dist_start < dist_start_min:
-                    dist_start_min = dist_start
-                    junction_start_min = junction
-                if dist_end < dist_end_min:
-                    dist_end_min = dist_end
-                    junction_end_min = junction
-            j1_x, j1_y = junction_start_min
-            j2_x, j2_y = junction_end_min
-            dist_junctions = abs(j1_x-j2_x) + abs (j1_y-j2_y)
-            return dist_start_min + dist_end_min + dist_junctions
-
-        self.DISTANCES = []
-        position_coords = [storage_pos, machines, input_pos, output_pos]
-        flat_coords = []
-        for element in position_coords:
-            if isinstance(element,list):
-                for list_element in element:
-                    flat_coords.append(list_element)
-            else:
-                flat_coords.append(element)
-        self.POSSIBLE_POSITIONS = list(zip(self.POSSIBLE_POSITIONS, flat_coords))
-        for start_obj in self.POSSIBLE_POSITIONS:
-            ends = list(self.POSSIBLE_POSITIONS) # Copy by value!
-            ends.remove(start_obj)
-            for end_obj in ends:
-                interface_and_machine_or_storage = (start_obj[0] == self.INPUT_BUFFER or start_obj[0] == self.OUTPUT_BUFFER) and (end_obj[0] in self.MACHINES or end_obj[0] == self.STORAGE)
-                machine_or_storage_and_interface = (end_obj[0] == self.INPUT_BUFFER or end_obj[0] == self.OUTPUT_BUFFER) and (start_obj[0] in self.MACHINES or start_obj[0] == self.STORAGE)
-                if interface_and_machine_or_storage or machine_or_storage_and_interface:
-                    # Nur eine Abzweigung in Zelle nötig
-                    shortest_distance = shortest_route_one_junction(start_obj[1], end_obj[1])
-                else:
-                    # Zwei Abzweigungen nötig
-                    shortest_distance = shortest_route_two_junctions(start_obj[1], end_obj[1])
-                self.DISTANCES.append((start_obj[0], end_obj[0], shortest_distance))
 
     def check_best_path(self, order, include_all=True):
         """Test if all tasks within the orders work schedule can be performed by this cell. Return True or False"""
@@ -238,6 +198,8 @@ class DistributionCell(Cell):
         self.INTERFACES_OUT = [child.OUTPUT_BUFFER for child in childs]
         self.POSSIBLE_POSITIONS += self.INTERFACES_IN
         self.POSSIBLE_POSITIONS += self.INTERFACES_OUT
+
+        self.DISTANCES = [(start, end, 5) for start in self.POSSIBLE_POSITIONS for end in self.POSSIBLE_POSITIONS if start is not end]
 
     def init_responsible_agents(self):
         """Set responsible agents of object within the cell to the cell agents"""
@@ -259,120 +221,16 @@ class DistributionCell(Cell):
             child_tasks.append(child.PERFORMABLE_TASKS)
         self.PERFORMABLE_TASKS = combine_performable_tasks(child_tasks)
 
-    def calculate_distances(self, input_pos, output_pos, storage_pos, junctions, interfaces_in, interfaces_out):
-        """Calculate distances within this cell and initialize self.DISTANCES for length of paths"""
-        junctions = junctions
-
-        def shortest_route_without_junction(start, end):
-            start_x, start_y = start
-            end_x, end_y = end
-            dist = abs(start_x-end_x) + abs(start_y-end_y)
-            return dist
-
-        def shortest_route_over_storage(start, end):
-            start_x, start_y = start
-            end_x, end_y = end
-            real_junctions = junctions
-            for x_top, y_top in interfaces_in:
-                real_junctions = [(x, y) for (x, y) in real_junctions if x != x_top]
-            junctions_with_dist = []
-            for junction in real_junctions:
-                x, y = junction
-                if x <= start_x:
-                    distance_from_start = abs(start_x-x) + abs(start_y-y)
-                else:
-                    distance_from_start = float('inf')
-                if x <= end_x:
-                    distance_to_end = abs(end_x-x) + abs(end_y-y)
-                else:
-                    distance_to_end = float('inf')
-                junctions_with_dist.append((junction, distance_from_start, distance_to_end))
-            dist_start_min = float('inf')
-            junction_start_min = None
-            dist_start_end_min = float('inf')
-            dist_end_min = float('inf')
-            dist_end_start_min = float('inf')
-            junction_end_min = None
-            for (junction, dist_start, dist_end) in junctions_with_dist:
-                if dist_start <= dist_start_min:
-                    if (dist_start == dist_start_min and dist_end <= dist_start_end_min) or dist_start < dist_start_min:
-                        dist_start_min = dist_start
-                        dist_start_end_min = dist_end
-                        junction_start_min = junction
-                if dist_end <= dist_end_min:
-                    if (dist_end == dist_end_min and dist_start <= dist_end_start_min) or dist_end < dist_end_min:
-                        dist_end_min = dist_end
-                        dist_end_start_min = dist_start
-                        junction_end_min = junction
-            j1_x, j1_y = junction_start_min
-            j2_x, j2_y = junction_end_min
-            dist_junctions = abs(j1_x-j2_x) + abs (j1_y-j2_y)
-            dist = dist_start_min + dist_end_min + dist_junctions
-            return dist
-
-        def shortest_route_two_junctions(start, end):
-            start_x, start_y = start
-            end_x, end_y = end
-            junctions_with_dist = []
-            for junction in junctions:
-                x, y = junction
-                distance_from_start = abs(start_x-x) + abs(start_y-y)
-                distance_to_end = abs(end_x-x) + abs(end_y-y)
-                junctions_with_dist.append((junction, distance_from_start, distance_to_end))
-            dist_start_min = float('inf')
-            junction_start_min = None
-            dist_end_min = float('inf')
-            junction_end_min = None
-            for (junction, dist_start, dist_end) in junctions_with_dist:
-                if dist_start < dist_start_min:
-                    dist_start_min = dist_start
-                    junction_start_min = junction
-                if dist_end < dist_end_min:
-                    dist_end_min = dist_end
-                    junction_end_min = junction
-            j1_x, j1_y = junction_start_min
-            j2_x, j2_y = junction_end_min
-            dist_junctions = abs(j1_x-j2_x) + abs (j1_y-j2_y)
-            dist = dist_start_min + dist_end_min + dist_junctions
-            return dist
-
-        self.DISTANCES = []
-        position_coords = [storage_pos, interfaces_in, interfaces_out, input_pos, output_pos]
-        flat_coords = []
-        for element in position_coords:
-            if isinstance(element,list):
-                for list_element in element:
-                    flat_coords.append(list_element)
-            else:
-                flat_coords.append(element)
-        self.POSSIBLE_POSITIONS = list(zip(self.POSSIBLE_POSITIONS, flat_coords))
-        for start_obj in self.POSSIBLE_POSITIONS:
-            ends = list(self.POSSIBLE_POSITIONS) # Copy by value!
-            ends.remove(start_obj)
-            for end_obj in ends:
-                int_in_global_and_local = start_obj[0] == self.INPUT_BUFFER and (end_obj[0] in self.INTERFACES_IN or end_obj[0] == self.STORAGE) or end_obj[0] == self.INPUT_BUFFER and (start_obj[0] in self.INTERFACES_IN or start_obj[0] == self.STORAGE)
-                int_out_global_and_local = start_obj[0] == self.OUTPUT_BUFFER and (end_obj[0] in self.INTERFACES_OUT or end_obj[0] == self.STORAGE) or end_obj[0] == self.OUTPUT_BUFFER and (start_obj[0] in self.INTERFACES_OUT or start_obj[0] == self.STORAGE)
-                int_local_and_local = (start_obj[0] in self.INTERFACES_IN and end_obj[0] in self.INTERFACES_IN) or (start_obj[0] in self.INTERFACES_OUT and end_obj[0] in self.INTERFACES_OUT)
-                if int_in_global_and_local or int_out_global_and_local:
-                    # Keine Abzweigung in Zelle nötig
-                    shortest_distance = shortest_route_without_junction(start_obj[1], end_obj[1])
-                elif int_local_and_local:
-                    # Zwei Abzweigungen nötig, Pfad führt nicht über Storage Buffer
-                    shortest_distance = shortest_route_two_junctions(start_obj[1], end_obj[1])
-                else:
-                    # Zwei Abzweigungen nötig, Pfad führt über Storage Buffer
-                    shortest_distance = shortest_route_over_storage(start_obj[1], end_obj[1])
-                self.DISTANCES.append((start_obj[0], end_obj[0], shortest_distance))
-
     def check_best_path(self, order, include_all=True):
         """Calculate the minimal amount of manufacturing cells needed to
          process this order completely in each tree branch"""
         child_results = []
         for child in self.CHILDS:
-            child_results.append(child.check_best_path(order)) # Rekursiver Aufruf im Teilbaum. Speichere Ergebnisse der Kinder in Liste.
+            child_results.append(child.check_best_path(
+                order))  # Rekursiver Aufruf im Teilbaum. Speichere Ergebnisse der Kinder in Liste.
         child_results[:] = (value for value in child_results if value != 0)
         if child_results:
-            return min(child_results) # Wenn Kinder Werte ausser 0 haben, gebe das Minimum zurueck
+            return min(child_results)  # Wenn Kinder Werte ausser 0 haben, gebe das Minimum zurueck
         elif self.all_tasks_included(order, all_tasks=include_all):
             if len(self.CHILDS) == 2:
                 return 2  # Alle Arbeitsschritte durchführbar und exakt 2 Childs vorhanden -> Arbeit muss geteilt werden
@@ -385,7 +243,8 @@ class DistributionCell(Cell):
                         for cell in subset:
                             tasks_list.append(cell.PERFORMABLE_TASKS)
                         combination_to_test = combine_performable_tasks(tasks_list)
-                        if self.all_tasks_included(order, alternative_tasks=combination_to_test) and len(subset) < min_combi:
+                        if self.all_tasks_included(order, alternative_tasks=combination_to_test) and len(
+                                subset) < min_combi:
                             min_combi = len(subset)
                 return min_combi
         else:
@@ -406,4 +265,142 @@ def combine_performable_tasks(task_array):
             if task_type == task:
                 number_of_machines += machines
         result.append((task, number_of_machines))
+    return result
+
+
+def get_order_attributes(order, requester, now):
+    if order:
+
+        result = {}
+
+        result["start"] = now - order.start
+        result["due_to"] = now - order.due_to
+        result["complexity"] = order.complexity
+        result["type"] = order.type.type_id
+        result["in_cell_since"] = now - order.in_cell_since
+
+        if not order.locked_by:
+            result["locked"] = 0
+        elif order.locked_by == requester:
+            result["locked"] = 1
+        else:
+            result["locked"] = 2
+
+        if not order.picked_up_by:
+            result["picked_up"] = 0
+        elif order.picked_up_by == requester:
+            result["picked_up"] = 1
+        else:
+            result["picked_up"] = 2
+
+
+        result["processing"] = int(order.processing)
+        result["tasks_finished"] = int(order.tasks_finished)
+        result["remaining_tasks"] = len(order.remaining_tasks)
+
+        if result["remaining_tasks"] is not 0:
+            result["next_task"] = order.next_task.id
+        else:
+            result["next_task"] = -1
+
+        if order.position:
+            result["position"] = order.current_cell.POSSIBLE_POSITIONS.index(order.position)
+            result["distance"] = requester.time_for_distance(order.position)
+        else:
+            result["position"] = -1
+            result["distance"] = -1
+
+
+        if isinstance(order.position, Machine.Machine):
+            if order == order.position.item_in_input:
+                result["in_m_input"] = 1
+                result["in_m"] = 0
+            elif order == order.position.item_in_machine:
+                result["in_m_input"] = 0
+                result["in_m"] = 1
+            else:
+                result["in_m_input"] = 0
+                result["in_m"] = 0
+        else:
+            result["in_m_input"] = 0
+            result["in_m"] = 0
+
+        if order.current_cell == requester.CELL:
+            result["in_same_cell"] = 1
+        else:
+            result["in_same_cell"] = 0
+
+    else:
+        result = {"start": 0, "due_to": 0, "complexity": 0, "type": 0, "in_cell_since": 0, "locked": 0,
+                             "picked_up": 0, "processing": 0, "tasks_finished": 0, "remaining_tasks": 0, "next_task": 0,
+                             "position": 0, "distance": 0, "in_m_input": 0, "in_m": 0, "in_same_cell": 0}
+
+    return result
+
+
+def get_pos_attributes(pos, now, cell: Cell):
+    result = {}
+
+    if isinstance(pos, ManufacturingAgent):
+        # Attributes of agent
+
+        result["agent_position"] = pos.position
+        result["moving"] = int(pos.moving)
+        if pos.moving:
+            result["remaining_moving_time"] = pos.moving_end_time - now
+            result["next_position"] = pos.next_position
+        else:
+            result["remaining_moving_time"] = 0
+            result["next_position"] = -1
+
+        result["has_task"] = int(pos.has_task)
+        result["locked_item"] = pos.locked_item
+
+    elif isinstance(pos, Machine.Machine):
+        # Attributes of machine
+
+        if pos.current_setup:
+            result["current_setup"] = pos.current_setup.type_id
+        else:
+            result["current_setup"] = -1
+
+        result["in_setup"] = int(pos.setup)
+
+        if pos.setup:
+            result["next_setup"] = pos.next_expected_order.type.type_id
+            result["remaining_setup_time"] = pos.setup_finished_at - now
+        else:
+            result["next_setup"] = result["current_setup"]
+            result["remaining_setup_time"] = 0
+
+        result["manufacturing"] = int(pos.manufacturing)
+        result["failure"] = int(pos.failure)
+
+        if pos.failure:
+            result["remaining_man_time"] = pos.remaining_manufacturing_time
+            result["failure_fixed_in"] = pos.failure_fixed_at - now
+        elif pos.manufacturing:
+            result["remaining_man_time"] = pos.manufacturing_end_time - now
+            result["failure_fixed_in"] = 0
+        else:
+            result["remaining_man_time"] = 0
+            result["failure_fixed_in"] = 0
+
+    elif isinstance(pos, InterfaceBuffer):
+        if pos.lower_cell == cell:
+            # Input/Output of Cell
+            if pos == cell.INPUT_BUFFER:
+                result["Interface outgoing"] = 0
+                result["Interface ingoing"] = 1
+            else:
+                result["Interface outgoing"] = 1
+                result["Interface ingoing"] = 0
+        elif pos.upper_cell == cell:
+            if pos == pos.lower_cell.INPUT_BUFFER:
+                result["Interface outgoing"] = 1
+                result["Interface ingoing"] = 0
+            else:
+                result["Interface outgoing"] = 0
+                result["Interface ingoing"] = 1
+
     return result

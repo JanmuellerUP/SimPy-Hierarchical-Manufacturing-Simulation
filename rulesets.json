@@ -35,20 +35,12 @@
                   "numerical": [
                     {
                       "measure": "start",
-                      "category": "local",
-                      "ranking_order": "ASC",
+                      "ranking_order": "DESC",
                       "weight": 1
                     },
                     {
                       "measure": "distance",
-                      "category": "local",
-                      "ranking_order": "ASC",
-                      "weight": 0.3
-                    },
-                                        {
-                      "measure": "est_accessable_in",
-                      "category": "local",
-                      "ranking_order": "ASC",
+                      "ranking_order": "DESC",
                       "weight": 0.3
                     }
                   ]
@@ -68,20 +60,12 @@
                   "numerical": [
                     {
                       "measure": "in_cell_since",
-                      "category": "local",
-                      "ranking_order": "ASC",
+                      "ranking_order": "DESC",
                       "weight": 1
                     },
                     {
                       "measure": "distance",
-                      "category": "local",
-                      "ranking_order": "ASC",
-                      "weight": 0.3
-                    },
-                    {
-                      "measure": "est_accessable_in",
-                      "category": "local",
-                      "ranking_order": "ASC",
+                      "ranking_order": "DESC",
                       "weight": 0.3
                     }
                   ]
@@ -93,12 +77,12 @@
             },
             {
               "id": 4,
-              "name": "Placeholder - Dynamic",
+              "name": "Dynamic 1: Machine Learning",
               "description": "Schnittstelle für Erweiterung mit Machinelearning Algorithmen",
               "rules":
               {
                 "dynamic": true,
-                "criteria": {}
+                "trained_model": "model_1.pkl"
               }
             }
           ]

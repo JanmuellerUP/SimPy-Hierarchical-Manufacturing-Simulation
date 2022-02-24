@@ -1,10 +1,14 @@
 import sys
 
 
-def _input(message, input_type=str):
+def _input(message, input_type=str, max=None):
     while True:
         try:
-            return input_type(input(message))
+            input_value = input_type(input(message))
+            if max:
+                if max < input_value:
+                    raise Exception
+            return input_value
         except:
             print('That´s not a valid option!\n')
             pass

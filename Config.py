@@ -1,12 +1,12 @@
 configuration = {
-    "SETUP_FILE": "medium_testsetup.txt",
+    "SETUP_FILE": "testsetup1.txt",
     "SIMULATION_RANGE": 2500,
     "SEED_MACHINE_INTERRUPTIONS": 29378374,
     "MACHINE_FAILURE_RATE": 20,
     "FAILURE_MINIMAL_LENGTH": 20,
     "FAILURE_MAXIMAL_LENGTH": 50,
     "SEED_INCOMING_ORDERS": 10278347,
-    "NUMBER_OF_ORDERS": 10,
+    "NUMBER_OF_ORDERS": 20,
     "ORDER_MINIMAL_LENGTH": 200,
     "ORDER_MAXIMAL_LENGTH": 300,
     "SPREAD_ORDER_COMPLEXITY": 0.1,
@@ -50,20 +50,20 @@ evaluation_measures = {
     },
 
     "order": {
-        "completion_time": True,
-        "tardiness": True,
-        "lateness": True,
-        "transportation_time": True,
+        "completion_time": False,
+        "tardiness": False,
+        "lateness": False,
+        "transportation_time": False,
         "average_transportation_time": True,
         "time_at_pos": False,
-        "time_at_pos_type": True,
-        "time_at_machines": True,
-        "time_in_interface_buffer": True,
-        "time_in_queue_buffer": True,
-        "production_time": True,
-        "wait_for_repair_time": True,
-        "time_in_cells": True,
-        "different_cells_run_through": True
+        "time_at_pos_type": False,
+        "time_at_machines": False,
+        "time_in_interface_buffer": False,
+        "time_in_queue_buffer": False,
+        "production_time": False,
+        "wait_for_repair_time": False,
+        "time_in_cells": False,
+        "different_cells_run_through": False
     },
 
     "agent": {
@@ -72,10 +72,8 @@ evaluation_measures = {
         "waiting_time": True,
         "idle_time": True,
         "task_time": True,
-        "started_prio_tasks": True,
-        "started_normal_tasks": True,
-        "average_task_length": True,
-        "time_at_pos": True
+        "started_tasks": True,
+        "average_task_length": True
     },
 
     "buffer": {

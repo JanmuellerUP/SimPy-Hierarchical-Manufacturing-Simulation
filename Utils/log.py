@@ -9,9 +9,11 @@ def write_log(obj):
 
 
 def get_log(obj, requester=None):
+
     data = class_to_dict(obj)
 
     if requester and isinstance(obj, Order):
         additional_criteria = obj.get_additional_ranking_criteria(requester)
         data = {**data, **additional_criteria}
+
     return data

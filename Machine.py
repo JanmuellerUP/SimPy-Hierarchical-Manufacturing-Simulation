@@ -8,7 +8,7 @@ from Utils.log import write_log
 class Machine:
     instances = []
 
-    def __init__(self, env: simpy.Environment, config: dict, task_id):
+    def __init__(self, config: dict, env: simpy.Environment, task_id):
         self.env = env
         self.SIMULATION_ENVIRONMENT = None
         self.CELL = None
@@ -50,21 +50,33 @@ class Machine:
         self.manufacturing_start_time = None
         self.manufacturing_time = 0
         self.remaining_manufacturing_time = 0
+        self.manufacturing_end_time = None
 
         self.setup = False
         self.setup_start_time = None
         self.remaining_setup_time = 0
+        self.setup_finished_at = None
 
         self.failure = False
         self.failure_time = None
         self.failure_fixed_in = 0
+        self.failure_fixed_at = 0
 
         self.__class__.instances.append(self)
-        self.logs = []
-        self._excluded_keys = ["logs", "env", "RESPONSIBLE_AGENTS", "_excluded_keys"]
+        self.result = None
+        self._excluded_keys = ["logs", "env", "RESPONSIBLE_AGENTS", "_excluded_keys", "_continuous_attributes"]
+        self._continuous_attributes = ["remaining_manufacturing_time", "remaining_setup_time", "failure_fixed_in"]
 
         self.env.process(self.initial_event())
         self.main_proc = self.env.process(self.main_process())
+
+    def occupancy(self):
+        return [{"order": self.item_in_input, "pos": self, "pos_type": "Machine-Input"},
+                {"order": self.item_in_machine, "pos": self, "pos_type": "Machine-Internal"},
+                {"order": self.item_in_output, "pos": self, "pos_type": "Machine-Output"}]
+
+    def get_pos_attributes(self, now):
+        return 0
 
     def save_event(self, event_type: str, est_time=None, next_setup_type=None):
         db = self.SIMULATION_ENVIRONMENT.db_con
@@ -183,7 +195,7 @@ class Machine:
                 waiting_agents = [agent for agent in self.agents_at_position if agent.current_waitingtask]
                 if len(waiting_agents) > 0:
                     waiting_agents[0].current_waitingtask.interrupt("New free slot in Machine Input")
-                self.CELL.recalculate_agents()
+                self.CELL.inform_agents()
             else:
                 raise Exception("Can not load item from machine input!")
         except simpy.Interrupt as interruption:
@@ -210,6 +222,7 @@ class Machine:
             self.setup = True
             self.setup_start_time = self.env.now
             self.remaining_setup_time = setup_time
+            self.setup_finished_at = self.setup_start_time + self.remaining_setup_time
             self.save_event("setup_start", next_setup_type=new_task)
             #print("Start setup", self, self.env.now, "OLD:", self.current_setup, "NEW", new_task, "Dauer:", self.remaining_setup_time, "ITEM", next_item, next_item.type)
             yield self.env.timeout(self.remaining_setup_time)
@@ -217,6 +230,7 @@ class Machine:
             if not self.load_item:
                 self.idle = True
             self.remaining_setup_time = 0
+            self.setup_finished_at = None
             self.setup_start_time = None
             self.current_setup = new_task
             self.save_event("setup_end")
@@ -255,7 +269,7 @@ class Machine:
         if not self.setup and not self.load_item:
             self.idle = True
         self.save_event("release_item_end")
-        self.CELL.recalculate_agents()
+        self.CELL.inform_agents()
 
     def calculate_processing_time(self, item, task):
         """
@@ -309,6 +323,7 @@ class Machine:
             self.idle = False
             self.manufacturing = True
             self.manufacturing_start_time = self.env.now
+            self.manufacturing_end_time = self.manufacturing_start_time + self.manufacturing_time
             self.item_in_machine.processing = True
             self.item_in_machine.save_event("processing_start")
             self.save_event("production_start", est_time=self.manufacturing_time)
@@ -317,6 +332,7 @@ class Machine:
             self.idle = False
             self.manufacturing = True
             self.manufacturing_start_time = self.env.now
+            self.manufacturing_end_time = self.manufacturing_start_time + self.remaining_manufacturing_time
             self.item_in_machine.processing = True
             self.item_in_machine.save_event("processing_continue")
             self.save_event("failure_end")
@@ -340,6 +356,7 @@ class Machine:
             self.manufacturing = False
             self.idle = True
             self.manufacturing_start_time = None
+            self.remaining_manufacturing_time = 0
             self.previous_item = self.item_in_machine
             #self.env.process(testing_machines_single(self.env))
             self.item_in_machine.processing = False
@@ -355,17 +372,19 @@ class Machine:
         self.failure = True
         self.failure_time = self.env.now
         self.failure_fixed_in = np.random.uniform(low=self.FAILURE_MIN_LENGTH, high=self.FAILURE_MAX_LENGTH)
+        self.failure_fixed_at = self.failure_fixed_in + self.failure_time
         self.manufacturing = False
         self.remaining_manufacturing_time = self.manufacturing_time - (self.env.now - self.manufacturing_start_time)
+        self.manufacturing_end_time = self.failure_fixed_at + self.remaining_manufacturing_time
         self.save_event("failure_start", est_time=self.failure_fixed_in)
 
         self.item_in_machine.machine_failure(True)
-        self.CELL.recalculate_agents(failure=True)
         yield self.env.timeout(self.failure_fixed_in)
 
         self.failure = False
         self.failure_time = None
         self.failure_fixed_in = 0
+        self.failure_fixed_at = None
         self.item_in_machine.machine_failure(False)
         yield self.env.process(self.process_manufacturing(new=False))
 

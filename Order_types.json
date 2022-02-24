@@ -3,6 +3,7 @@
           [
             {
               "title": "Produkt A",
+              "id": 1,
               "frequency_factor": 2,
               "duration_factor": 1,
               "composition": {
@@ -10,10 +11,11 @@
                 "plastic": 0.7,
                 "copper": 0
               },
-              "work_schedule": [1, 3, 2]
+              "work_schedule": [2, 4, 3]
             },
             {
               "title": "Produkt B",
+              "id": 2,
               "frequency_factor": 1,
               "duration_factor": 1,
               "composition": {
@@ -21,10 +23,11 @@
                 "plastic": 1.3,
                 "copper": 0.7
               },
-              "work_schedule": [2, 0, 3]
+              "work_schedule": [3, 1, 4]
             },
             {
               "title": "Produkt C",
+              "id": 3,
               "frequency_factor": 1,
               "duration_factor": 1.3,
               "composition": {
@@ -32,7 +35,7 @@
                 "plastic": 0.4,
                 "copper": 2.3
               },
-              "work_schedule": [3, 1, 2, 0]
+              "work_schedule": [4, 2, 3, 1]
             }
           ]
 }
