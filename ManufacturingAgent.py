@@ -139,9 +139,13 @@ class ManufacturingAgent:
         time_tracker.time_destination_calc += time.time() - dest_calc_start
 
         if self.RULESET.dynamic:
+            now = time.time()
             next_task, next_order = self.get_smart_action(cell_state)
+            time_tracker.time_action_calc += time.time() - now
         else:
+            now = time.time()
             next_task, next_order = self.get_action(cell_state)
+            time_tracker.time_smart_action_calc += time.time() - now
 
         # Perform next task if there is one
         if next_task:
@@ -226,10 +230,11 @@ class ManufacturingAgent:
 
         # Get action
         action = 10
+        #action = smart_agent.get_action(state_flat)
 
         if action <= len(state_numeric):
             # Normal action
-            order = order_state.at[action, "order"]
+            next_order = order_state.at[action, "order"]
             destination = order_state.at[action, "_destination"]
         else:
             # Take no action
@@ -237,8 +242,11 @@ class ManufacturingAgent:
 
         penalty = RewardLayer.evaluate_choice(state_numeric.loc[action])
 
-        # Rewards after task was completed
-        return self.get_action(order_state)
+        if penalty < 0:
+            #smart_agent.appendMemory(former_state=state_flat, new_state=state_flat, action=action, reward=penalty, time_passed=0)
+            return None, None
+        else:
+            return self.env.process(self.item_from_to(next_order, next_order.position, destination)), next_order
 
     def state_to_numeric(self, order_state):
         order_state["slot_id"] = order_state.index
