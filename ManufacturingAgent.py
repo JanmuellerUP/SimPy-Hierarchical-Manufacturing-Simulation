@@ -36,6 +36,7 @@ class ManufacturingAgent:
         if not self.RULESET:  # Check if the Agent has a Ruleset selected
             raise Exception(
                 "Atleast one Agent has no ruleset defined. Please choose a ruleset or the agent wont do anything!")
+        self.ranking_criteria = [criteria["measure"] for criteria in self.RULESET.numerical_criteria]
 
         self.CELL = None
         self.PARTNER_AGENTS = None  # Other Agents within the same Cell
@@ -118,21 +119,55 @@ class ManufacturingAgent:
     def end_event(self):
         self.save_event("End_of_Time")
 
-    def occupancy(self, requester=None):
+    def occupancy(self, attributes: list, requester=None):
         if requester == self:
             pos_type = "Agent - Self"
         else:
             pos_type = "Agent"
 
+        def agent_position():
+            return self.position
+
+        def moving():
+            return int(self.moving)
+
+        def remaining_moving_time():
+            if self.moving:
+                return self.moving_end_time - self.env.now
+            else:
+                return 0
+
+        def next_position():
+            if self.moving:
+                return self.next_position
+            else:
+                return -1
+
+        def has_task():
+            return int(self.has_task)
+
+        def locked_item():
+            if self.locked_item:
+                return self.locked_item
+            else:
+                return -1
+
+        attr = {}
+        for attribute in attributes:
+            attr[attribute] = locals()[attribute]()
+
         if self.picked_up_item:
-            return [{"order": self.picked_up_item, "pos": self, "pos_type": pos_type}]
+            return [{"order": self.picked_up_item, "pos": self, "pos_type": pos_type}], attr
         else:
-            return [{"order": None, "pos": self, "pos_type": pos_type}]
+            return [{"order": None, "pos": self, "pos_type": pos_type}], attr
 
     def main_process(self):
         """Main process of the agent. Decisions about its behavior are made in this process.
         Endless loop: Interruptable with self.recalculate(self.main_proc).
         """
+        if not self.CELL.orders_available():
+            return
+
         self.lock.acquire()
 
         # Get state of cell and orders inside this cell
@@ -280,14 +315,16 @@ class ManufacturingAgent:
 
         # Map categorical values to ids
         cols = ["pos", "agent_position", "next_position", "_destination"]
+        cols = [column for column in cols if column in order_state.columns.values.tolist()]
         order_state[cols] = order_state[cols].replace(pos_ids)
 
         cols = ["pos_type"]
         order_state[cols] = order_state[cols].replace(pos_type_ids)
 
-        order_state["locked_item"].fillna(-2)
-        cols = ["locked_item"]
-        order_state[cols] = order_state[cols].replace(orders_in_cell)
+        if "locked_item" in order_state.columns.values.tolist():
+            order_state["locked_item"].fillna(-2)
+            cols = ["locked_item"]
+            order_state[cols] = order_state[cols].replace(orders_in_cell)
 
         order_state = order_state.fillna(0)
         order_state.loc[order_state["order"] != 0, "order"] = 1
@@ -648,7 +685,6 @@ class ManufacturingAgent:
             return 0
         else:
             return get_time(start_position, destination)
-
 
     def state_change_in_cell(self):
         if not self.main_proc.is_alive:

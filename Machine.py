@@ -70,13 +70,59 @@ class Machine:
         self.env.process(self.initial_event())
         self.main_proc = self.env.process(self.main_process())
 
-    def occupancy(self):
-        return [{"order": self.item_in_input, "pos": self, "pos_type": "Machine-Input"},
-                {"order": self.item_in_machine, "pos": self, "pos_type": "Machine-Internal"},
-                {"order": self.item_in_output, "pos": self, "pos_type": "Machine-Output"}]
+    def occupancy(self, attributes: list, requester=None):
 
-    def get_pos_attributes(self, now):
-        return 0
+        def machine_type():
+            return self.PERFORMABLE_TASK.id
+
+        def current_setup():
+            if self.current_setup:
+                return self.current_setup.type_id
+            else:
+                return -1
+
+        def in_setup():
+            return int(self.setup)
+
+        def next_setup():
+            if self.setup:
+                return self.next_expected_order.type.type_id
+            else:
+                return current_setup()
+
+        def remaining_setup_time():
+            if self.setup:
+                return self.setup_finished_at - self.env.now
+            else:
+                return 0
+
+        def manufacturing():
+            return int(self.manufacturing)
+
+        def failure():
+            return int(self.failure)
+
+        def remaining_man_time():
+            if self.failure:
+                return self.remaining_manufacturing_time
+            elif self.manufacturing:
+                return self.manufacturing_end_time - self.env.now
+            else:
+                return 0
+
+        def failure_fixed_in():
+            if self.failure:
+                return self.failure_fixed_at - self.env.now
+            else:
+                return 0
+
+        attr = {}
+        for attribute in attributes:
+            attr[attribute] = locals()[attribute]()
+
+        return ([{"order": self.item_in_input, "pos": self, "pos_type": "Machine-Input"},
+                {"order": self.item_in_machine, "pos": self, "pos_type": "Machine-Internal"},
+                {"order": self.item_in_output, "pos": self, "pos_type": "Machine-Output"}], attr)
 
     def save_event(self, event_type: str, est_time=None, next_setup_type=None):
         db = self.SIMULATION_ENVIRONMENT.db_con

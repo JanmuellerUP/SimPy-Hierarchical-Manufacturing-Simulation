@@ -67,12 +67,41 @@ class Buffer:
                 self.waiting_agents[0].current_waitingtask.interrupt("New space free")
         self.save_event("item_picked_up", item)
 
-    def occupancy(self, pos_type: str):
-        return [{"order": item, "pos": self, "pos_type": pos_type} for item in self.items_in_storage] \
-               + [{"order": None, "pos": self, "pos_type": pos_type}] * (self.STORAGE_CAPACITY - len(self.items_in_storage))
+    def occupancy(self, pos_type: str, attributes: list, cell=None):
 
-    def get_pos_attributes(self, now):
-        return 0
+        def interface_outgoing():
+            if self.lower_cell == cell:
+                # Input/Output of Cell
+                if self == cell.INPUT_BUFFER:
+                    return 0
+                else:
+                    return 1
+            elif self.upper_cell == cell:
+                if self == self.lower_cell.INPUT_BUFFER:
+                    return 1
+                else:
+                    return 0
+
+        def interface_ingoing():
+            if self.lower_cell == cell:
+                # Input/Output of Cell
+                if self == cell.INPUT_BUFFER:
+                    return 1
+                else:
+                    return 0
+            elif self.upper_cell == cell:
+                if self == self.lower_cell.INPUT_BUFFER:
+                    return 0
+                else:
+                    return 1
+
+        attr = {}
+        if isinstance(self, InterfaceBuffer):
+            for attribute in attributes:
+                attr[attribute] = locals()[attribute]()
+
+        return ([{"order": item, "pos": self, "pos_type": pos_type} for item in self.items_in_storage] \
+               + [{"order": None, "pos": self, "pos_type": pos_type}] * (self.STORAGE_CAPACITY - len(self.items_in_storage)), attr)
 
 
 class QueueBuffer(Buffer):

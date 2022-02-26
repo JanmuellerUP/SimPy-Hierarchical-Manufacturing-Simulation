@@ -345,14 +345,16 @@ def generator_from_setup(setup, config, env: simpy.Environment):
             # Manufacturing cell
             setup.loc[index, "cell_obj"] = Cell.ManufacturingCell(column["machine_obj"], env, column["agent_obj"],
                                                                   column["storage_obj"], column["input_obj"],
-                                                                  column["output_obj"], column["Level"])
+                                                                  column["output_obj"], column["Level"], index,
+                                                                  column["Type"])
 
         else:
             # Distribution cell
             childs = setup[setup["Parent"] == index]["cell_obj"].tolist()
             setup.loc[index, "cell_obj"] = Cell.DistributionCell(childs, env, column["agent_obj"],
                                                                   column["storage_obj"], column["input_obj"],
-                                                                  column["output_obj"], column["Level"])
+                                                                  column["output_obj"], column["Level"], index,
+                                                                  column["Type"])
 
         column["input_obj"].lower_cell = setup.loc[index, "cell_obj"]
         column["output_obj"].lower_cell = setup.loc[index, "cell_obj"]
@@ -385,6 +387,8 @@ def finish_setup(cell):
 
 def set_env_in_cells(sim_env, cells):
     for cell in cells.tolist():
+
+        sim_env.cells.append(cell)
 
         cell.SIMULATION_ENVIRONMENT = sim_env
         cell.INPUT_BUFFER.SIMULATION_ENVIRONMENT = sim_env

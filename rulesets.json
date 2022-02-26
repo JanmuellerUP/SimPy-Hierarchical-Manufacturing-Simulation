@@ -59,7 +59,7 @@
                 "criteria": {
                   "numerical": [
                     {
-                      "measure": "in_cell_since",
+                      "measure": "time_in_cell",
                       "ranking_order": "DESC",
                       "weight": 1
                     },

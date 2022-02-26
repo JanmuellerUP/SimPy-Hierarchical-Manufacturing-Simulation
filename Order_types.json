@@ -4,7 +4,7 @@
             {
               "title": "Produkt A",
               "id": 1,
-              "frequency_factor": 2,
+              "frequency_factor": 1.5,
               "duration_factor": 1,
               "composition": {
                 "wood": 2.0,

@@ -1,3 +1,6 @@
+import state_attributes
+
+
 def check_configuration_file(config: dict):
 
     limitations = {
@@ -148,3 +151,22 @@ def check_configuration_file(config: dict):
                         raise ValueError("The chosen configuration value for {name} is not permitted! It violates the {rule} : {value}".format(name=key, rule=limit_k, value=limit_v))
 
     check_config_values(config)
+
+
+def check_state_attributes():
+    normal_state = state_attributes.normal_state
+    smart_state = state_attributes.smart_state
+
+    essential_attr = {
+                    "order": ["type", "tasks_finished", "next_task", "locked", "picked_up", "in_same_cell", "in_m_input", "in_m"],
+                    "buffer": [],
+                    "machine": [],
+                    "agent": []
+                    }
+
+    for key, value in essential_attr.items():
+        if not set(value) <= set(normal_state[key]):
+            raise Exception("Please check state_attributes.py! The chosen attributes for normal states violate the essential attributes needed to run a simulation.")
+
+        if not set(value) <= set(smart_state[key]):
+            raise Exception("Please check state_attributes.py! The chosen attributes for smart states violate the essential attributes needed to run a simulation.")
